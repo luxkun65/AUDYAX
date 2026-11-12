@@ -24,6 +24,7 @@ from yt_dlp.postprocessor.common import PostProcessor
 from yt_dlp.utils import sanitize_filename
 
 try:
+    from mutagen import File as MutagenFile
     from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
     from mutagen.mp3 import MP3
     from mutagen.mp4 import MP4, AtomDataType, MP4FreeForm
@@ -51,6 +52,7 @@ CONFIG_POR_DEFECTO = {
     "normalizar": False,
     "recorte": True,
     "replaygain": True,
+    "tema": "dark",
 }
 
 # ==============================================================================
@@ -98,6 +100,7 @@ def etiquetas(info: dict) -> dict:
         "artista": info.get("artist") or "",
         "album": info.get("album") or "",
         "anio": str(info.get("release_year") or (info.get("upload_date") or "")[:4] or ""),
+        "genero": info.get("genre") or (info.get("genres") or [""])[0] or "",
         "url": info.get("webpage_url") or info.get("original_url") or "",
     }
 
@@ -180,6 +183,34 @@ def texto_rg(pista, album=None):
     if album:
         t += f" · álbum {album['gain']:.2f} dB"
     return t
+
+
+def info_archivo(ruta) -> dict:
+    """Datos técnicos del archivo ya descargado (formato, duración, bitrate, tamaño, muestreo).
+    Solo lee; no modifica nada. Los campos que no se puedan leer quedan vacíos."""
+    p = Path(ruta)
+    datos = {"formato": p.suffix.lstrip(".").upper(), "duracion": "", "bitrate": "",
+             "muestreo": "", "tamano": ""}
+    try:
+        datos["tamano"] = f"{p.stat().st_size / 1048576:.1f} MB"
+    except OSError:
+        pass
+    if HAY_MUTAGEN:
+        try:
+            audio = MutagenFile(p)
+            if audio is not None and audio.info is not None:
+                seg = int(getattr(audio.info, "length", 0) or 0)
+                if seg:
+                    datos["duracion"] = f"{seg // 60}:{seg % 60:02d}"
+                br = getattr(audio.info, "bitrate", 0) or 0
+                if br:
+                    datos["bitrate"] = f"{round(br / 1000)} kbps"
+                sr = getattr(audio.info, "sample_rate", 0) or 0
+                if sr:
+                    datos["muestreo"] = f"{sr / 1000:g} kHz"
+        except Exception:
+            pass
+    return datos
 
 
 def escribir_replaygain(ruta: Path, pista: dict, album=None):
@@ -290,7 +321,11 @@ def _entrada(e: dict) -> dict:
     url = str(e.get("webpage_url") or e.get("url") or "")
     if not url.startswith("http"):
         url = f"https://www.youtube.com/watch?v={e['id']}"
-    return {"id": e["id"], "titulo": e.get("track") or e.get("title") or e["id"], "url": url}
+    miniatura = e.get("thumbnail") or ""
+    if not miniatura and e.get("thumbnails"):
+        miniatura = (e["thumbnails"][-1] or {}).get("url") or ""
+    return {"id": e["id"], "titulo": e.get("track") or e.get("title") or e["id"],
+            "url": url, "miniatura": miniatura}
 
 
 def analizar_url(url: str, carpeta: Path):
@@ -407,7 +442,8 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     destino.mkdir(parents=True, exist_ok=True)
     ya_estan = ids_en_archivo(carpeta)
     for e in entradas:
-        emitir(("nuevo", e["id"], {"titulo": e["titulo"], "url": e["url"]}))
+        emitir(("nuevo", e["id"], {"titulo": e["titulo"], "url": e["url"],
+                                   "miniatura": e["miniatura"]}))
         if e["id"] in ya_estan:
             emitir(("omitida", e["id"]))
 
