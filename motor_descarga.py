@@ -70,6 +70,16 @@ CONFIG_POR_DEFECTO = {
     "tema": "dark",
     "revisar_ytdlp": True,           # avisar al abrir si hay una versión nueva de yt-dlp
     "detectar_portapapeles": True,   # ofrecer pegar un enlace de YouTube copiado
+    "organizar": "plano",            # "plano" | "artista" | "artista_album" (ver MODOS_ORGANIZAR)
+    "playlists_en_carpeta": True,    # las playlists van juntas en su carpeta aunque se organice
+}
+
+# Cómo repartir las canciones en carpetas. Cada nivel es un campo aparte de la plantilla
+# de yt-dlp: así un "/" dentro de un nombre (p. ej. "AC/DC") no crea carpetas de más.
+MODOS_ORGANIZAR = {
+    "plano": [],
+    "artista": ["org_artista"],
+    "artista_album": ["org_artista", "org_album"],
 }
 
 # ==============================================================================
@@ -145,9 +155,11 @@ class LimpiarMetadata(PostProcessor):
     """Elige mejores campos que 'uploader', decide el nombre final del archivo
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
 
-    def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto=""):
+    def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto="",
+                 organizar="plano"):
         super().__init__(downloader)
         self.destino = destino
+        self.organizar = organizar
         self.emitir = emitir
         self.cancelar = cancelar
         # id -> {"titulo", "artista", "album"} tal como los muestra YouTube Music. Mandan sobre
@@ -182,7 +194,13 @@ class LimpiarMetadata(PostProcessor):
         if not info.get("album"):
             info["album"] = info.get("playlist_title") or self.album_defecto or info["title"]
 
-        info["nombre_archivo"] = nombre_unico(self.destino, info["title"], info["artist"])
+        # Carpetas de organización (si están activadas) y nombre que no choque dentro de ellas
+        info["org_artista"] = info["artist"] or "Artista desconocido"
+        info["org_album"] = info["album"] or "Sin álbum"
+        carpeta = self.destino
+        for campo in MODOS_ORGANIZAR.get(self.organizar, []):
+            carpeta = carpeta / sanitize_filename(info[campo])
+        info["nombre_archivo"] = nombre_unico(carpeta, info["title"], info["artist"])
 
         self.emitir(("info", info["id"], etiquetas(info)))
         return [], info
@@ -543,12 +561,30 @@ ETAPAS = {
 }
 
 
-def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) -> dict:
+def plantilla_salida(destino: Path, organizar: str = "plano") -> str:
+    """Ruta de salida para yt-dlp, p. ej. destino/%(org_artista)s/%(org_album)s/%(nombre_archivo)s.%(ext)s
+    No se pone "/" dentro de un campo porque yt-dlp lo convierte en "⧹"."""
+    niveles = [f"%({campo})s" for campo in MODOS_ORGANIZAR.get(organizar, [])]
+    return str(destino.joinpath(*niveles, "%(nombre_archivo)s.%(ext)s"))
+
+
+def modo_organizar(cfg: dict, es_playlist: bool) -> str:
+    """Organización que se aplica a este trabajo concreto."""
+    modo = cfg.get("organizar", "plano")
+    if modo not in MODOS_ORGANIZAR:
+        return "plano"
+    if cfg.get("subcarpeta"):
+        return "plano"  # reintento de una canción de playlist: vuelve junto a su playlist
+    if es_playlist and cfg.get("playlists_en_carpeta", True):
+        return "plano"
+    return modo
+
+
+def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
+                       organizar="plano") -> dict:
     """Opciones de yt-dlp. Los postprocesadores se añaden aparte (agregar_postprocesadores)
     porque uno de ellos es una clase propia que no se puede declarar por nombre."""
-    # La subcarpeta ya viene resuelta en 'destino'. No se pone "/" dentro de un
-    # campo de la plantilla porque yt-dlp lo convierte en "⧹".
-    plantilla = str(destino / "%(nombre_archivo)s.%(ext)s")
+    plantilla = plantilla_salida(destino, organizar)
 
     ppa = {}
     if cfg["recorte"]:
@@ -580,13 +616,13 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) ->
 
 
 def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
-                             extras=None, album_defecto=""):
+                             extras=None, album_defecto="", organizar="plano"):
     """Cadena de postprocesado, en orden: portada -> nombre/tags -> audio -> metadatos -> portada
     incrustada -> ReplayGain y aviso de 'listo'."""
     codec = "best" if cfg["formato"] == "original" else cfg["formato"]
     ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
-    ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto),
-                           when="pre_process")
+    ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto,
+                                           organizar), when="pre_process")
     ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
                                         preferredquality=cfg["calidad"]))
     ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
@@ -651,6 +687,9 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     # 1) Mostrar de inmediato todas las canciones (amarillas, "en cola")
     plan = resolver(url, carpeta, cfg.get("subcarpeta") or "", log)
     destino, entradas, es_playlist = plan["destino"], plan["entradas"], plan["es_playlist"]
+    organizar = modo_organizar(cfg, es_playlist)
+    if es_playlist and organizar != "plano":
+        destino = carpeta  # la playlist se reparte por artista/álbum en vez de ir a su carpeta
     destino.mkdir(parents=True, exist_ok=True)
     ya_estan = ids_en_archivo(carpeta)
     sub = subcarpeta_relativa(destino, carpeta)
@@ -691,11 +730,11 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
         if d.get("status") == "started" and etapa and id_video:
             emitir(("estado", id_video, etapa))
 
-    opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp)
+    opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp, organizar)
     registro = []
     with YoutubeDL(opciones) as ydl:
         agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
-                                 plan["extras"], plan["album_defecto"])
+                                 plan["extras"], plan["album_defecto"], organizar)
         if urls:
             ydl.download(urls)
 

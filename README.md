@@ -21,6 +21,7 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - **Tag editor**: fix the title, artist, album, year, genre or cover of a downloaded MP3, M4A or Opus file from the detail panel.
 - **yt-dlp updates**: YouTube changes often and old yt-dlp versions stop working. AUDYAX checks for a new version on startup (can be turned off in *Configuración*) and updates it with one click; restart the app afterwards.
 - Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
+- **Optional folder organization** (*Configuración → Organizar descargas*, off by default): keep everything in one folder, or sort songs into `Artist/` or `Artist/Album/` subfolders using their tags. Playlists can still go together in their own folder.
 - Light and dark themes; settings are saved in `~/.descargador_musica.json`.
 
 ## Requirements
