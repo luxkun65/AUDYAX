@@ -32,14 +32,18 @@ from PIL import Image, ImageDraw
 
 from motor_descarga import (
     HAY_MUTAGEN,
+    MAX_SIMULTANEAS,
     DownloadCancelled,
     actualizar_ytdlp,
     buscar,
     cargar_config,
+    descargas_simultaneas,
     ejecutar_trabajo,
     es_enlace_youtube,
     es_mas_nueva,
     escribir_etiquetas,
+    exportar_csv,
+    exportar_m3u,
     extraer_enlaces,
     guardar_config,
     info_archivo,
@@ -81,6 +85,10 @@ ORGANIZAR = {
     "artista_album": ("Artista / Álbum", "Descargas/Daft Punk/Discovery/One More Time.mp3"),
 }
 COLORES = {"verde": "#2ecc71", "amarillo": "#f1c40f", "rojo": "#e74c3c"}
+
+# Filtro por estado de la lista: texto del menú -> color de la fila (None = todas)
+FILTROS_ESTADO = {"Todas": None, "Descargadas": "verde", "En proceso": "amarillo", "Con error": "rojo"}
+ORDEN_ESTADO = {"rojo": 0, "amarillo": 1, "verde": 2}  # al ordenar por estado, errores primero
 
 # Ancho de cada columna de la lista (0 = ocupa el espacio sobrante)
 ANCHOS = [34, 150, 52, 0, 170, 170, 60, 250]
@@ -166,6 +174,15 @@ def _dibujar_icono(nombre: str, color: str, tam: int) -> Image.Image:
     elif nombre == "edit":
         d.polygon([pt(.18, .66), pt(.66, .18), pt(.82, .34), pt(.34, .82)], outline=color, width=w)
         d.polygon([pt(.12, .88), pt(.18, .66), pt(.34, .82)], fill=color)
+    elif nombre == "pause":
+        d.rounded_rectangle(caja(.2, .14, .4, .86), radius=n * .04, fill=color)
+        d.rounded_rectangle(caja(.6, .14, .8, .86), radius=n * .04, fill=color)
+    elif nombre == "play":
+        d.polygon([pt(.26, .12), pt(.86, .5), pt(.26, .88)], fill=color)
+    elif nombre == "export":
+        linea([(.5, .62), (.5, .1)])
+        linea([(.28, .32), (.5, .1), (.72, .32)])
+        linea([(.14, .6), (.14, .88), (.86, .88), (.86, .6)])
     elif nombre == "nota":
         d.ellipse(caja(.08, .62, .42, .92), fill=color)
         d.ellipse(caja(.56, .52, .9, .82), fill=color)
@@ -280,6 +297,21 @@ def elegir_fuente(raiz) -> str:
     return tkfont.nametofont("TkDefaultFont").actual("family")
 
 
+def liberar_variable(var: tk.Variable):
+    """Libera ya, en el hilo principal, una variable de tkinter que se deja de usar.
+    Si no, Python la libera donde caiga su última referencia, a veces en un hilo de
+    descarga, y tkinter avisa en consola "main thread is not in main loop"."""
+    try:
+        if var._tk is not None:
+            var._tk.globalunsetvar(var._name)
+            for nombre in var._tclCommands or ():
+                var._tk.deletecommand(nombre)
+            var._tclCommands = None
+    except (tk.TclError, AttributeError):
+        pass
+    var._tk = None  # así su __del__ ya no hace nada
+
+
 def configurar_columnas(frame):
     for i, a in enumerate(ANCHOS):
         frame.grid_columnconfigure(i, minsize=a, weight=1 if a == 0 else 0)
@@ -324,6 +356,38 @@ class FilaLista:
                   self.l_album, self.l_anio, self.l_enlace):
             w.bind("<Button-1>", lambda e: app._seleccionar(vid), add=True)
             w.bind("<Double-Button-1>", lambda e: app._abrir_enlace(vid), add=True)
+            # Clic derecho (Button-2 en macOS): menú con las acciones de esa canción
+            for boton in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
+                if boton:
+                    w.bind(boton, lambda e: app._menu_fila(vid, e), add=True)
+
+        # Pasar el mouse por el estado de una canción en cola/descargándose lo convierte en
+        # "✕ Cancelar"; un clic ahí la cancela (sin tener que seleccionarla ni marcarla).
+        self._sobre_estado = False
+        self.l_estado.bind("<Enter>", lambda e: self._hover_estado(True), add=True)
+        self.l_estado.bind("<Leave>", lambda e: self._hover_estado(False), add=True)
+        self.l_estado.bind("<Button-1>", self._clic_estado, add=True)
+
+    def _cancelable(self) -> bool:
+        f = self.app.filas.get(self.vid)
+        return bool(f) and f["color"] == "amarillo"
+
+    def _hover_estado(self, dentro: bool):
+        self._sobre_estado = dentro
+        if self.vid in self.app.filas:
+            self._pintar_estado(self.app.filas[self.vid])
+
+    def _pintar_estado(self, f):
+        if self._sobre_estado and f["color"] == "amarillo":
+            self._set("estado", self.l_estado, text="  Cancelar", image=self.app.ico_estado["rojo"],
+                      text_color=COLORES["rojo"], cursor="hand2")
+        else:
+            self._set("estado", self.l_estado, text="  " + corto(f["texto"], 20),
+                      image=self.app.ico_estado[f["color"]], text_color=C["texto"], cursor="")
+
+    def _clic_estado(self, _evento=None):
+        if self._cancelable():
+            self.app._cancelar_canciones([self.vid])
 
     def _set(self, clave, widget, **kw):
         if self._ult.get(clave) != kw:
@@ -331,19 +395,19 @@ class FilaLista:
             self._ult[clave] = kw
 
     def actualizar(self, f):
-        self._set("estado", self.l_estado, text="  " + corto(f["texto"], 20),
-                  image=self.app.ico_estado[f["color"]])
+        self._pintar_estado(f)
         self._set("titulo", self.l_titulo, text=corto(f["titulo"], 34))
-        self._set("artista", self.l_artista, text=corto(f["artista"] or "—", 22))
-        self._set("album", self.l_album, text=corto(f["album"] or "—", 22))
+        # 19 caracteres caben en la columna; más largo la ensancha y desalinea la fila
+        self._set("artista", self.l_artista, text=corto(f["artista"] or "—", 19))
+        self._set("album", self.l_album, text=corto(f["album"] or "—", 19))
         self._set("anio", self.l_anio, text=f["anio"] or "—")
         self._set("enlace", self.l_enlace, text="  " + corto(f["url"], 32))
         if f["img_s"] is not None:
             self._set("thumb", self.l_thumb, image=f["img_s"])
 
     def pintar(self, seleccionada: bool):
-        num = self.app.filas[self.vid]["num"]
-        color = C["sel"] if seleccionada else (C["fila_a"] if num % 2 else C["fila_b"])
+        pos = self.app.filas[self.vid].get("pos", 0)  # posición en la vista (filtrada/ordenada)
+        color = C["sel"] if seleccionada else (C["fila_a"] if pos % 2 == 0 else C["fila_b"])
         if self._ult.get("color") != color:
             self.frame.configure(fg_color=color)
             self._ult["color"] = color
@@ -610,13 +674,21 @@ class App(ctk.CTk, *_BASES_DND):
 
         self.eventos = queue.Queue()   # worker -> interfaz
         self.trabajos = queue.Queue()  # interfaz -> worker
-        self.cancelar = threading.Event()
-        self.hilo = None
+        self.pausa = threading.Event()        # activado = descargas en pausa
+        self.duenos = {}                      # id de canción -> conjunto 'omitir' de su trabajo
+        self.tokens = set()                   # un Event de cancelación por trabajo en curso
+        self.candado_tokens = threading.Lock()
+        self.hilos = []                       # hilos que atienden la cola de trabajos
+        self.limite = threading.BoundedSemaphore(descargas_simultaneas(self.cfg))
+        self.limite_n = descargas_simultaneas(self.cfg)
         self.pool = ThreadPoolExecutor(max_workers=4)  # descarga de miniaturas
         self.pendientes = 0
         self.errores_generales = 0
         self.filas = {}   # id -> datos de la canción
         self.sel = None   # id de la canción mostrada en el detalle
+        self.orden = ("num", False)   # (columna, descendente); "num" = orden de llegada
+        self._visibles = set()        # ids que pasan el filtro actual
+        self._vista_programada = False
         self.ventana_resultados = None
         self.buscando = False
         self.actualizando = False
@@ -733,9 +805,6 @@ class App(ctk.CTk, *_BASES_DND):
             dropdown_fg_color=C["card"], dropdown_text_color=C["texto"],
             dropdown_hover_color=C["hover"])
         self.cb_calidad.pack(side="left", padx=(6, 0))
-        self.btn_cancelar = self._boton(fila2, "Cancelar todo", self._cancelar, icono("cancel", 16),
-                                        width=140, height=34, state="disabled")
-        self.btn_cancelar.pack(side="right")
 
         fila3 = ctk.CTkFrame(ctrl, fg_color="transparent")
         fila3.grid(row=2, column=0, columnspan=4, sticky="ew", padx=14, pady=(4, 12))
@@ -762,6 +831,7 @@ class App(ctk.CTk, *_BASES_DND):
         # Lista
         marco_l = self._tarjeta(main)
         marco_l.grid(row=2, column=0, sticky="nsew", pady=10)
+        self._construir_barra_lista(marco_l)
         cab_l = ctk.CTkFrame(marco_l, fg_color=C["card2"], corner_radius=10, height=38)
         cab_l.pack(fill="x", padx=6, pady=(6, 2), ipady=2)
         configurar_columnas(cab_l)
@@ -770,10 +840,17 @@ class App(ctk.CTk, *_BASES_DND):
                         hover_color=C["acento_hover"], border_color=C["suave"],
                         checkmark_color=C["sobre_acento"], command=self._marcar_todas).grid(
             row=0, column=0, padx=(10, 0), pady=6)
-        for col, texto, span in [(1, "Estado", 1), (2, "Título", 2), (4, "Artista", 1),
-                                 (5, "Álbum", 1), (6, "Año", 1), (7, "Enlace", 1)]:
-            ctk.CTkLabel(cab_l, text=texto, font=self.f_neg, anchor="w").grid(
-                row=0, column=col, columnspan=span, sticky="w", padx=(4, 0))
+        # Cabeceras: clic para ordenar (▲ ascendente, ▼ descendente, tercer clic = orden de llegada)
+        self.cabeceras = {}
+        for col, texto, span, clave in [(1, "Estado", 1, "estado"), (2, "Título", 2, "titulo"),
+                                        (4, "Artista", 1, "artista"), (5, "Álbum", 1, "album"),
+                                        (6, "Año", 1, "anio"), (7, "Enlace", 1, None)]:
+            lbl = ctk.CTkLabel(cab_l, text=texto, font=self.f_neg, anchor="w")
+            lbl.grid(row=0, column=col, columnspan=span, sticky="w", padx=(4, 0))
+            if clave:
+                self.cabeceras[clave] = (lbl, texto)
+                lbl.configure(cursor="hand2")
+                lbl.bind("<Button-1>", lambda e, c=clave: self._ordenar_por(c))
         cab_l.grid_columnconfigure(7, minsize=ANCHOS[7] + 14)
         self.lista = ctk.CTkScrollableFrame(marco_l, fg_color="transparent", corner_radius=0,
                                             scrollbar_button_color=C["card2"],
@@ -831,12 +908,15 @@ class App(ctk.CTk, *_BASES_DND):
 
         self.det_botones = ctk.CTkFrame(det, fg_color="transparent")
         self.det_botones.pack(fill="x", padx=12, pady=(2, 10))
+        # width pequeño: cada botón mide lo que su texto (si no, todos miden 140 y no caben)
         for texto, ico, cmd in [("Copiar enlace", "copy", self._copiar_enlace),
                                 ("Abrir enlace", "external", lambda: self._abrir_enlace()),
-                                ("Abrir carpeta", "folder", self._abrir_carpeta_cancion),
-                                ("Editar etiquetas", "edit", self._editar_etiquetas),
-                                ("Reintentar", "refresh", self._reintentar)]:
-            self._boton(self.det_botones, texto, cmd, icono(ico, 16), height=34).pack(side="left", padx=(0, 8))
+                                ("Carpeta", "folder", self._abrir_carpeta_cancion),
+                                ("Etiquetas", "edit", self._editar_etiquetas),
+                                ("Reintentar", "refresh", self._reintentar),
+                                ("Cancelar", "cancel", self._cancelar_canciones)]:
+            self._boton(self.det_botones, texto, cmd, icono(ico, 16), height=34, width=60).pack(
+                side="left", padx=(0, 8))
         self._boton(self.det_botones, "Limpiar lista", self._limpiar_lista, icono("trash", 16),
                     height=34).pack(side="right")
 
@@ -849,6 +929,8 @@ class App(ctk.CTk, *_BASES_DND):
                                text=f"  0 {etiqueta}", font=self.f_norm)
             lbl.pack(side="left", padx=(6, 26))
             self.contadores[nombre] = (lbl, etiqueta)
+        self.lbl_pausa = ctk.CTkLabel(barra, text="  En pausa", image=icono("pause", 14, COLORES["amarillo"]),
+                                      compound="left", font=self.f_neg, text_color=COLORES["amarillo"])
         self.lbl_pct = ctk.CTkLabel(barra, text="0%", width=44, anchor="e", font=self.f_norm)
         self.lbl_pct.pack(side="right")
         self.progreso = ctk.CTkProgressBar(barra, width=260, height=8, progress_color=C["acento"],
@@ -919,7 +1001,7 @@ class App(ctk.CTk, *_BASES_DND):
     def _configuracion(self):
         top = ctk.CTkToplevel(self)
         top.title("Configuración")
-        top.geometry("440x580")
+        top.geometry("440x660")
         top.resizable(False, False)
         top.transient(self)
         top.configure(fg_color=C["bg"])
@@ -940,6 +1022,18 @@ class App(ctk.CTk, *_BASES_DND):
             side="left")
 
         self._seccion_organizar(top)
+
+        ctk.CTkLabel(top, text="Descargas simultáneas", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
+        seg_n = ctk.CTkSegmentedButton(
+            top, values=[str(i) for i in range(1, MAX_SIMULTANEAS + 1)], font=self.f_norm,
+            selected_color=C["acento"], selected_hover_color=C["acento_hover"],
+            unselected_color=C["card2"], unselected_hover_color=C["hover"], text_color=C["texto"],
+            command=lambda v: self._cambiar_simultaneas(int(v)))
+        seg_n.set(str(descargas_simultaneas(self.cfg)))
+        seg_n.pack(anchor="w", padx=20)
+        ctk.CTkLabel(top, text="Canciones que se bajan a la vez. Con más, YouTube puede frenar las descargas.",
+                     font=self.f_peq, text_color=C["suave"], wraplength=400, justify="left").pack(
+            anchor="w", padx=20, pady=(4, 0))
 
         ctk.CTkLabel(top, text="Portapapeles", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
         var_pp = tk.BooleanVar(value=self.cfg.get("detectar_portapapeles", True))
@@ -1061,6 +1155,7 @@ class App(ctk.CTk, *_BASES_DND):
             "detectar_portapapeles": bool(self.cfg.get("detectar_portapapeles", True)),
             "organizar": self.cfg.get("organizar", "plano"),
             "playlists_en_carpeta": bool(self.cfg.get("playlists_en_carpeta", True)),
+            "descargas_simultaneas": descargas_simultaneas(self.cfg),
         }
 
     def _descargar(self):
@@ -1212,7 +1307,7 @@ class App(ctk.CTk, *_BASES_DND):
             return
         self._cerrar()
 
-    def _encolar(self, url: str, subcarpeta: str = "") -> bool:
+    def _encolar(self, url: str, subcarpeta: str = "", extras=None) -> bool:
         cfg = self._cfg_actual()
         if not cfg["carpeta"]:
             messagebox.showwarning("Falta la carpeta", "Elige dónde guardar las canciones.")
@@ -1224,39 +1319,146 @@ class App(ctk.CTk, *_BASES_DND):
             return False
         guardar_config(cfg)
         cfg["subcarpeta"] = subcarpeta  # p. ej. la carpeta de la playlist al reintentar
+        cfg["extras"] = extras or {}    # título/artista/álbum a conservar (ver _reintentar)
         self.pendientes += 1
         self.trabajos.put((url, cfg))
-        if self.hilo is None or not self.hilo.is_alive():
-            self.hilo = threading.Thread(target=self._hilo_trabajo, daemon=True)
-            self.hilo.start()
+        self._asegurar_hilos()
         self._actualizar_botones()
         return True
+
+    def _asegurar_hilos(self):
+        """Tantos hilos atendiendo la cola como descargas simultáneas: así varias canciones
+        sueltas (p. ej. elegidas en la búsqueda) también se bajan a la vez. El semáforo
+        self.limite es el que pone el tope real de canciones descargándose."""
+        self.hilos = [h for h in self.hilos if h.is_alive()]
+        while len(self.hilos) < self.limite_n:
+            h = threading.Thread(target=self._hilo_trabajo, daemon=True)
+            h.start()
+            self.hilos.append(h)
 
     def _hilo_trabajo(self):
         while True:
             url, cfg = self.trabajos.get()
-            self.cancelar.clear()
+            token = threading.Event()  # cancelación propia de este trabajo
+            omitir = set()             # canciones de este trabajo canceladas una a una
+
+            def emitir(ev, omitir=omitir):
+                if ev[0] == "nuevo":   # esta canción la baja este trabajo
+                    self.duenos[ev[1]] = omitir
+                self.eventos.put(ev)
+            with self.candado_tokens:
+                self.tokens.add(token)
             try:
-                ejecutar_trabajo(url, cfg, self.eventos.put, self.cancelar)
+                ejecutar_trabajo(url, cfg, emitir, token, self.pausa, self.limite, omitir)
             except DownloadCancelled:
                 self.eventos.put(("cancelado",))
             except Exception as e:
                 self.eventos.put(("error", "?", str(e)))
             finally:
+                with self.candado_tokens:
+                    self.tokens.discard(token)
                 self.eventos.put(("fin",))
 
     def _cancelar(self):
-        self.cancelar.set()
+        with self.candado_tokens:
+            for token in self.tokens:
+                token.set()
         try:  # descarta los trabajos que aún no empezaron
             while True:
                 self.trabajos.get_nowait()
                 self.pendientes -= 1
         except queue.Empty:
             pass
+        if self.pausa.is_set():
+            self._alternar_pausa()  # al cancelar, se sale de la pausa
         self._actualizar_botones()
 
+    def _cancelar_canciones(self, vids=None):
+        """Cancela la canción seleccionada (la de color morado) y, si hay, las marcadas con la
+        casilla. No hace falta marcar nada: basta con seleccionarla. Las demás siguen."""
+        if vids is None:
+            vids = ([self.sel] if self.sel in self.filas else []) + \
+                   [v for v in self._marcadas() if v != self.sel]
+        candidatas = vids
+        validas = [v for v in candidatas if v in self.filas and self.filas[v]["color"] == "amarillo"]
+        if not validas:
+            messagebox.showinfo("Cancelar", "Solo se pueden cancelar canciones en cola o descargándose.")
+            return
+        for vid in validas:
+            dueno = self.duenos.get(vid)
+            if dueno is not None:
+                dueno.add(vid)  # el motor la salta o la corta en el próximo aviso de progreso
+            f = self.filas[vid]
+            f["texto_previo"] = ""
+            self._fila(vid, color="rojo", texto="Cancelada", motivo="Cancelada por el usuario")
+            f["cancelada"] = True
+
+    def _nuevo_menu(self) -> tk.Menu:
+        """Menú emergente con los colores del tema actual (claro u oscuro)."""
+        i = 1 if self.tema == "dark" else 0
+        return tk.Menu(self, tearoff=0, bg=C["card"][i], fg=C["texto"][i], activebackground=C["sel"][i],
+                       activeforeground=C["texto"][i], disabledforeground=C["suave"][i],
+                       relief="flat", borderwidth=1, font=(self.f_norm.cget("family"), 11))
+
+    def _menu_fila(self, vid, evento):
+        """Menú de clic derecho sobre una canción de la lista."""
+        if vid not in self.filas:
+            return
+        self._seleccionar(vid)
+        f = self.filas[vid]
+        menu = self._nuevo_menu()
+        if f["color"] == "amarillo":
+            menu.add_command(label="Cancelar esta canción", command=lambda: self._cancelar_canciones([vid]))
+        if f["color"] == "rojo" and f["url"]:
+            menu.add_command(label="Reintentar", command=self._reintentar)
+        if f["color"] == "verde" and f["ruta"]:
+            menu.add_command(label="Editar etiquetas", command=self._editar_etiquetas)
+            menu.add_command(label="Abrir carpeta", command=self._abrir_carpeta_cancion)
+        if f["url"]:
+            if menu.index("end") is not None:
+                menu.add_separator()
+            menu.add_command(label="Copiar enlace", command=self._copiar_enlace)
+            menu.add_command(label="Abrir enlace", command=lambda: self._abrir_enlace(vid))
+        if menu.index("end") is not None:
+            menu.tk_popup(evento.x_root, evento.y_root)
+
+    def _alternar_pausa(self):
+        if self.pausa.is_set():
+            self.pausa.clear()
+            for vid, f in self.filas.items():
+                if f.get("texto_previo") and f["texto"] == "En pausa":
+                    self._fila(vid, texto=f["texto_previo"])
+                f["texto_previo"] = ""
+            self.lbl_pausa.pack_forget()
+        else:
+            self.pausa.set()
+            # Las que se estaban bajando o procesando muestran "En pausa"
+            for vid, f in list(self.filas.items()):
+                if f["color"] == "amarillo" and f["texto"] != "En cola":
+                    f["texto_previo"] = f["texto"]
+                    self._fila(vid, texto="En pausa")
+            self.lbl_pausa.pack(side="left", padx=(6, 0))
+        self._actualizar_botones()
+
+    def _cambiar_simultaneas(self, n: int):
+        self.cfg["descargas_simultaneas"] = n
+        guardar_config(self._cfg_actual())
+        n = descargas_simultaneas(self.cfg)
+        if n != self.limite_n:
+            # Los trabajos ya empezados siguen con el límite anterior; los nuevos usan este
+            self.limite_n = n
+            self.limite = threading.BoundedSemaphore(n)
+            if self.pendientes:
+                self._asegurar_hilos()
+
     def _actualizar_botones(self):
-        self.btn_cancelar.configure(state="normal" if self.pendientes > 0 else "disabled")
+        hay = self.pendientes > 0
+        self.btn_cancelar.configure(state="normal" if hay else "disabled")
+        if self.pausa.is_set():
+            self.btn_pausa.configure(text="Reanudar", image=self.ico_play, state="normal")
+        else:
+            self.btn_pausa.configure(text="Pausar", image=self.ico_pausa,
+                                     state="normal" if hay else "disabled")
 
     def _revisar_ffmpeg(self):
         if not shutil.which("ffmpeg"):
@@ -1280,12 +1482,26 @@ class App(ctk.CTk, *_BASES_DND):
                 "artista": "", "album": "", "anio": "", "genero": "", "url": "", "ruta": "",
                 "subcarpeta": "", "motivo": "", "replaygain": "", "miniatura": "", "img_pedida": False,
                 "img_s": None, "img_b": None, "datos": None, "datos_pedidos": False,
-                "marca": tk.BooleanVar(value=False)}
+                "texto_previo": "", "pos": len(self.filas), "marca": tk.BooleanVar(value=False)}
             self.filas[vid]["w"] = FilaLista(self, self.lista, vid)
+            if self._vista_activa():
+                self.filas[vid]["w"].frame.pack_forget()  # la vista decide si y dónde va
         f = self.filas[vid]
+        if self.pausa.is_set() and campos.get("texto") and f["color"] == "amarillo" \
+                and campos.get("color", "amarillo") == "amarillo" and f["texto"] == "En pausa" \
+                and campos["texto"] != "En pausa":
+            f["texto_previo"] = campos.pop("texto")  # en pausa se sigue mostrando "En pausa"
+        antes = {k: f.get(k) for k in ("color", "titulo", "artista", "album", "anio")}
         for k, v in campos.items():
             if v is not None and k in f and k not in ("w", "marca"):
                 f[k] = v
+        if self._vista_activa():
+            cambio = any(f.get(k) != v for k, v in antes.items())
+            if nueva or (cambio and (vid in self._visibles) != self._coincide(f)) or \
+                    (cambio and self.orden[0] != "num"):
+                self._programar_vista()
+        elif nueva:
+            self._visibles.add(vid)
         if f["miniatura"] and not f["img_pedida"]:
             f["img_pedida"] = True
             self.pool.submit(self._bajar_imagen, vid, f["miniatura"])
@@ -1306,7 +1522,148 @@ class App(ctk.CTk, *_BASES_DND):
     def _renumerar(self):
         for i, (vid, f) in enumerate(self.filas.items(), 1):
             f["num"] = i
+        self._aplicar_vista()
+
+    # ---------------------------------------------------------------- filtrar / ordenar
+    def _construir_barra_lista(self, marco):
+        barra = ctk.CTkFrame(marco, fg_color="transparent")
+        barra.pack(fill="x", padx=8, pady=(8, 2))
+        self.var_filtro = tk.StringVar()
+        self.var_estado = tk.StringVar(value="Todas")
+        busq = ctk.CTkEntry(barra, textvariable=self.var_filtro, width=280, height=32, corner_radius=10,
+                            placeholder_text="Buscar en la lista (título, artista, álbum)…", font=self.f_norm,
+                            fg_color=C["input"], border_color=C["borde"], text_color=C["texto"])
+        busq.pack(side="left")
+        busq.bind("<Escape>", lambda e: self.var_filtro.set(""))
+        self.var_filtro.trace_add("write", lambda *a: self._programar_vista(250))
+        ctk.CTkLabel(barra, text="Estado:", font=self.f_norm).pack(side="left", padx=(16, 6))
+        ctk.CTkOptionMenu(barra, variable=self.var_estado, values=list(FILTROS_ESTADO), width=140,
+                          height=32, font=self.f_norm, dropdown_font=self.f_norm, fg_color=C["input"],
+                          button_color=C["card2"], button_hover_color=C["hover"], text_color=C["texto"],
+                          dropdown_fg_color=C["card"], dropdown_text_color=C["texto"],
+                          dropdown_hover_color=C["hover"],
+                          command=lambda v: self._aplicar_vista()).pack(side="left")
+        self.lbl_mostrando = ctk.CTkLabel(barra, text="", font=self.f_peq, text_color=C["suave"])
+        self.lbl_mostrando.pack(side="left", padx=14)
+        # Controles de la cola, a la derecha: Exportar | Pausar | Cancelar todo
+        self.btn_cancelar = self._boton(barra, "Cancelar todo", self._cancelar, icono("cancel", 16),
+                                        width=130, height=32, state="disabled")
+        self.btn_cancelar.pack(side="right")
+        self.ico_pausa, self.ico_play = icono("pause", 16), icono("play", 16)
+        self.btn_pausa = self._boton(barra, "Pausar", self._alternar_pausa, self.ico_pausa,
+                                     width=112, height=32, state="disabled")
+        self.btn_pausa.pack(side="right", padx=(0, 8))
+        self.btn_exportar = self._boton(barra, "Exportar", self._menu_exportar, icono("export", 16),
+                                        height=32, width=112)
+        self.btn_exportar.pack(side="right", padx=(0, 16))
+
+    def _vista_activa(self) -> bool:
+        """True si hay filtro u orden distinto al de llegada (entonces la lista se re-arma)."""
+        return (bool(self.var_filtro.get().strip()) or FILTROS_ESTADO.get(self.var_estado.get())
+                is not None or self.orden[0] != "num")
+
+    def _coincide(self, f) -> bool:
+        color = FILTROS_ESTADO.get(self.var_estado.get())
+        if color and f["color"] != color:
+            return False
+        texto = " ".join(str(f.get(k) or "") for k in ("titulo", "artista", "album")).casefold()
+        return all(p in texto for p in self.var_filtro.get().casefold().split())
+
+    def _filas_en_vista(self) -> list:
+        """Ids visibles, en el orden en que se muestran."""
+        items = [(vid, f) for vid, f in self.filas.items() if self._coincide(f)]
+        col, desc = self.orden
+        if col == "num":
+            items.sort(key=lambda it: it[1]["num"], reverse=desc)
+        elif col == "estado":
+            items.sort(key=lambda it: (ORDEN_ESTADO.get(it[1]["color"], 9), it[1]["num"]), reverse=desc)
+        else:
+            # Las que no tienen ese dato van siempre al final, en orden de llegada
+            llenas = [it for it in items if str(it[1].get(col) or "").strip()]
+            vacias = [it for it in items if not str(it[1].get(col) or "").strip()]
+            llenas.sort(key=lambda it: (str(it[1][col]).casefold(), it[1]["num"]), reverse=desc)
+            items = llenas + vacias
+        return [vid for vid, _ in items]
+
+    def _programar_vista(self, ms: int = 300):
+        if not self._vista_programada:
+            self._vista_programada = True
+            self.after(ms, self._aplicar_vista)
+
+    def _aplicar_vista(self):
+        self._vista_programada = False
+        orden = self._filas_en_vista()
+        for f in self.filas.values():
+            f["w"].frame.pack_forget()
+        for i, vid in enumerate(orden):
+            f = self.filas[vid]
+            f["pos"] = i
+            f["w"].frame.pack(fill="x", pady=1)
             f["w"].pintar(vid == self.sel)
+        self._visibles = set(orden)
+        filtrado = len(orden) != len(self.filas)
+        self.lbl_mostrando.configure(text=f"Mostrando {len(orden)} de {len(self.filas)}" if filtrado else "")
+        self._al_marcar_fila()
+
+    def _ordenar_por(self, clave: str):
+        col, desc = self.orden
+        if col != clave:
+            self.orden = (clave, False)
+        elif not desc:
+            self.orden = (clave, True)
+        else:
+            self.orden = ("num", False)  # tercer clic: vuelve al orden de llegada
+        for c, (lbl, texto) in self.cabeceras.items():
+            flecha = (" ▼" if self.orden[1] else " ▲") if c == self.orden[0] else ""
+            lbl.configure(text=texto + flecha)
+        self._aplicar_vista()
+
+    # ---------------------------------------------------------------- exportar
+    def _menu_exportar(self):
+        menu = self._nuevo_menu()
+        menu.add_command(label="Lista de reproducción (.m3u) de las descargadas", command=self._exportar_m3u)
+        menu.add_command(label="Tabla (.csv) de la lista", command=self._exportar_csv)
+        b = self.btn_exportar
+        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def _exportar_m3u(self):
+        canciones = [self.filas[v] for v in self._filas_en_vista()
+                     if self.filas[v]["color"] == "verde" and self.filas[v]["ruta"]
+                     and Path(self.filas[v]["ruta"]).exists()]
+        if not canciones:
+            messagebox.showinfo("Exportar", "No hay canciones descargadas en esta sesión (con el filtro actual).")
+            return
+        ruta = filedialog.asksaveasfilename(
+            parent=self, title="Guardar lista de reproducción", defaultextension=".m3u",
+            initialdir=self.var_carpeta.get() or None, initialfile="AUDYAX.m3u",
+            filetypes=[("Lista M3U", "*.m3u"), ("Lista M3U (UTF-8)", "*.m3u8")])
+        if not ruta:
+            return
+        try:
+            n = exportar_m3u(ruta, canciones)
+        except OSError as e:
+            messagebox.showerror("No se pudo exportar", str(e))
+            return
+        messagebox.showinfo("Exportar", f"Lista guardada con {n} canciones:\n{ruta}")
+
+    def _exportar_csv(self):
+        orden = self._filas_en_vista()
+        if not orden:
+            messagebox.showinfo("Exportar", "La lista está vacía.")
+            return
+        ruta = filedialog.asksaveasfilename(
+            parent=self, title="Guardar la lista como CSV", defaultextension=".csv",
+            initialdir=self.var_carpeta.get() or None, initialfile="AUDYAX.csv",
+            filetypes=[("CSV", "*.csv")])
+        if not ruta:
+            return
+        filas = [dict(self.filas[v], num=i, estado=self.filas[v]["texto"]) for i, v in enumerate(orden, 1)]
+        try:
+            n = exportar_csv(ruta, filas)
+        except OSError as e:
+            messagebox.showerror("No se pudo exportar", str(e))
+            return
+        messagebox.showinfo("Exportar", f"Se exportaron {n} filas:\n{ruta}")
 
     def _actualizar_contadores(self):
         cuenta = {"verde": 0, "amarillo": 0, "rojo": 0}
@@ -1330,9 +1687,13 @@ class App(ctk.CTk, *_BASES_DND):
 
     def _manejar(self, ev):
         tipo = ev[0]
+        cancelada = tipo in ("info", "estado", "error", "rg") and self.filas.get(
+            ev[1] if len(ev) > 1 else None, {}).get("cancelada")
+        if cancelada:
+            return  # avisos atrasados de una canción que el usuario canceló
         if tipo == "nuevo":
             if ev[1] in self.filas:  # reintento: se vuelven a leer los datos del archivo
-                self.filas[ev[1]].update(datos=None, datos_pedidos=False)
+                self.filas[ev[1]].update(datos=None, datos_pedidos=False, cancelada=False)
             self._fila(ev[1], color="amarillo", texto="En cola", motivo="", ruta="", **ev[2])
         elif tipo == "info":
             self._fila(ev[1], **ev[2])
@@ -1340,6 +1701,8 @@ class App(ctk.CTk, *_BASES_DND):
             if self.filas.get(ev[1], {}).get("color") != "rojo":
                 self._fila(ev[1], color="amarillo", texto=ev[2])
         elif tipo == "listo":
+            if ev[1] in self.filas:
+                self.filas[ev[1]]["cancelada"] = False  # terminó justo antes de cancelarla
             self._fila(ev[1], color="verde", texto="Descargada", motivo="", **ev[2])
         elif tipo == "rg":
             self._fila(ev[1], replaygain=ev[2])
@@ -1367,6 +1730,8 @@ class App(ctk.CTk, *_BASES_DND):
                     self._mostrar_detalle()
         elif tipo == "fin":
             self.pendientes = max(0, self.pendientes - 1)
+            if self.pendientes == 0 and self.pausa.is_set():
+                self._alternar_pausa()  # no queda nada en pausa
             self._actualizar_botones()
         elif tipo == "busqueda":
             self._mostrar_resultados(ev[1], ev[2])
@@ -1412,23 +1777,28 @@ class App(ctk.CTk, *_BASES_DND):
         self._mostrar_detalle()
 
     def _al_marcar_fila(self):
-        self.var_todas.set(bool(self.filas) and all(f["marca"].get() for f in self.filas.values()))
+        visibles = [self.filas[v] for v in self._visibles if v in self.filas]
+        self.var_todas.set(bool(visibles) and all(f["marca"].get() for f in visibles))
 
     def _marcar_todas(self):
+        """Marca/desmarca solo las filas que se ven (respeta el filtro)."""
         valor = self.var_todas.get()
-        for f in self.filas.values():
-            f["marca"].set(valor)
+        for vid in self._visibles:
+            if vid in self.filas:
+                self.filas[vid]["marca"].set(valor)
 
     def _marcadas(self):
         return [vid for vid, f in self.filas.items() if f["marca"].get()]
 
     def _limpiar_lista(self):
-        objetivo = self._marcadas() or list(self.filas)
+        # Sin marcadas: se quitan las que se ven (p. ej. filtrando "Con error" se limpian los errores)
+        objetivo = self._marcadas() or [v for v in self.filas if v in self._visibles]
         for vid in objetivo:
             f = self.filas[vid]
             if f["color"] == "amarillo":
                 continue
             f["w"].destruir()
+            liberar_variable(f["marca"])
             del self.filas[vid]
             if self.sel == vid:
                 self.sel = None
@@ -1546,13 +1916,19 @@ class App(ctk.CTk, *_BASES_DND):
             messagebox.showinfo("Reintentar", "Solo se pueden reintentar canciones con error que tengan enlace.")
             return
         for vid in validas:
+            f = self.filas[vid]
+            # Si venía de una playlist de YouTube Music se conservan su título, artista y álbum
+            # (al bajarla sola, yt-dlp pondría los del video: "(Official Video)", "ArtistaVEVO"…)
+            extras = None
+            if f["url"].startswith("https://music.youtube.com/"):
+                extras = {vid: {k: f[k] for k in ("titulo", "artista", "album")}}
             # Se reintenta en la misma subcarpeta (la de su playlist, si venía de una)
-            self._encolar(self.filas[vid]["url"], self.filas[vid]["subcarpeta"])
+            self._encolar(f["url"], f["subcarpeta"], extras)
 
     # ---------------------------------------------------------------- cierre
     def _cerrar(self):
         guardar_config(self._cfg_actual())
-        self.cancelar.set()
+        self._cancelar()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
