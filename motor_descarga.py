@@ -10,15 +10,20 @@ Requisitos:
     ffmpeg instalado y en el PATH
 """
 import base64
+import csv
 import json
 import logging
 import logging.handlers
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -72,7 +77,12 @@ CONFIG_POR_DEFECTO = {
     "detectar_portapapeles": True,   # ofrecer pegar un enlace de YouTube copiado
     "organizar": "plano",            # "plano" | "artista" | "artista_album" (ver MODOS_ORGANIZAR)
     "playlists_en_carpeta": True,    # las playlists van juntas en su carpeta aunque se organice
+    "descargas_simultaneas": 2,      # canciones que se bajan a la vez (1 = una tras otra)
 }
+MAX_SIMULTANEAS = 3  # más que esto hace que YouTube empiece a frenar o bloquear
+
+# Escrituras compartidas entre hilos (faltantes.txt, log)
+_CANDADO_ARCHIVOS = threading.Lock()
 
 # Cómo repartir las canciones en carpetas. Cada nivel es un campo aparte de la plantilla
 # de yt-dlp: así un "/" dentro de un nombre (p. ej. "AC/DC") no crea carpetas de más.
@@ -85,6 +95,26 @@ MODOS_ORGANIZAR = {
 # ==============================================================================
 # MOTOR DE DESCARGA (sin nada de interfaz; se comunica enviando eventos)
 # ==============================================================================
+def descargas_simultaneas(cfg: dict) -> int:
+    try:
+        n = int(cfg.get("descargas_simultaneas", 1))
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(MAX_SIMULTANEAS, n))
+
+
+def esperar_si_pausa(pausa, cancelar):
+    """Si está en pausa, se queda esperando aquí (sin consumir CPU) hasta reanudar.
+    Cancelar también despierta la espera. yt-dlp llama a los hooks de progreso muy a menudo,
+    así que bloquearlos detiene la descarga en curso; al reanudar, sigue donde iba."""
+    while pausa is not None and pausa.is_set():
+        if cancelar is not None and cancelar.is_set():
+            break
+        time.sleep(0.2)
+    if cancelar is not None and cancelar.is_set():
+        raise DownloadCancelled("Cancelado por el usuario")
+
+
 class RegistroYtdlp:
     """Logger para yt-dlp: guarda todo en el log y avisa del motivo real de cada fallo."""
 
@@ -132,15 +162,17 @@ def etiquetas(info: dict) -> dict:
     }
 
 
-def nombre_unico(destino: Path, titulo: str, artista: str) -> str:
+def nombre_unico(destino: Path, titulo: str, artista: str, ocupados=None) -> str:
     """Nombre de archivo (sin extensión) que no choque con otro de la carpeta.
     Primero solo el título; si ya existe, 'Título (Artista)'; si también, 'Título (Artista) 2', 3…
-    Se compara sin distinguir mayúsculas porque Windows tampoco las distingue."""
+    Se compara sin distinguir mayúsculas porque Windows tampoco las distingue.
+    'ocupados': nombres apartados por descargas en curso que aún no crearon su archivo."""
     base = sanitize_filename(titulo)
     try:
         usados = {f.stem.casefold() for f in destino.iterdir()} if destino.exists() else set()
     except OSError:
         usados = set()
+    usados |= {n.casefold() for n in ocupados or ()}
     if base.casefold() not in usados:
         return base
     con_artista = f"{base} ({sanitize_filename(artista)})"
@@ -151,13 +183,31 @@ def nombre_unico(destino: Path, titulo: str, artista: str) -> str:
     return nombre
 
 
+class ReservaNombres:
+    """Con varias descargas a la vez, dos canciones con el mismo título podrían elegir el
+    mismo nombre antes de que exista el archivo. Esto aparta cada nombre al elegirlo."""
+
+    def __init__(self):
+        self._candado = threading.Lock()
+        self._apartados = {}  # carpeta -> {nombres}
+
+    def reservar(self, carpeta: Path, titulo: str, artista: str) -> str:
+        with self._candado:
+            apartados = self._apartados.setdefault(str(carpeta), set())
+            nombre = nombre_unico(carpeta, titulo, artista, apartados)
+            apartados.add(nombre)
+            return nombre
+
+
 class LimpiarMetadata(PostProcessor):
     """Elige mejores campos que 'uploader', decide el nombre final del archivo
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
 
     def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto="",
-                 organizar="plano"):
+                 organizar="plano", reservas=None, pausa=None):
         super().__init__(downloader)
+        self.reservas = reservas or ReservaNombres()
+        self.pausa = pausa
         self.destino = destino
         self.organizar = organizar
         self.emitir = emitir
@@ -168,8 +218,7 @@ class LimpiarMetadata(PostProcessor):
         self.album_defecto = album_defecto
 
     def run(self, info):
-        if self.cancelar.is_set():
-            raise DownloadCancelled("Cancelado por el usuario")
+        esperar_si_pausa(self.pausa, self.cancelar)
 
         extra = self.extras.get(info.get("id")) or {}
         if extra.get("titulo"):
@@ -200,7 +249,7 @@ class LimpiarMetadata(PostProcessor):
         carpeta = self.destino
         for campo in MODOS_ORGANIZAR.get(self.organizar, []):
             carpeta = carpeta / sanitize_filename(info[campo])
-        info["nombre_archivo"] = nombre_unico(carpeta, info["title"], info["artist"])
+        info["nombre_archivo"] = self.reservas.reservar(carpeta, info["title"], info["artist"])
 
         self.emitir(("info", info["id"], etiquetas(info)))
         return [], info
@@ -509,9 +558,11 @@ def pistas_ytmusic(url: str, cliente=None):
 
 
 def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
-    """Devuelve (carpeta_destino, lista_de_canciones, es_playlist). Si es playlist, usa subcarpeta.
-    'subcarpeta' fuerza el destino (se usa al reintentar una canción que venía de una playlist)."""
+    """Devuelve (carpeta_destino, lista_de_canciones, es_playlist, titulo_playlist).
+    Si es playlist, usa subcarpeta. 'subcarpeta' fuerza el destino (se usa al reintentar
+    una canción que venía de una playlist)."""
     destino, entradas, es_playlist = (carpeta / subcarpeta if subcarpeta else carpeta), [], False
+    titulo = ""
     try:
         opciones = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
                     "ignoreerrors": True, "logger": _Silencio()}
@@ -519,6 +570,7 @@ def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
             info = ydl.extract_info(url, download=False)
         if info and info.get("_type") == "playlist":
             es_playlist = True
+            titulo = info.get("title") or ""
             if info.get("title") and not subcarpeta:
                 destino = carpeta / sanitize_filename(info["title"])
             for e in info.get("entries") or []:
@@ -528,7 +580,7 @@ def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
             entradas.append(_entrada(info))
     except Exception:
         pass
-    return destino, entradas, es_playlist
+    return destino, entradas, es_playlist, titulo
 
 
 def ids_en_archivo(carpeta: Path) -> set:
@@ -540,16 +592,22 @@ def ids_en_archivo(carpeta: Path) -> set:
 
 
 def configurar_log(carpeta: Path) -> logging.Logger:
+    """Log en carpeta/descarga.log. Si ya apunta ahí no se toca (puede haber otras descargas
+    escribiendo en él a la vez)."""
     log = logging.getLogger("descargador")
     log.setLevel(logging.DEBUG)
-    for h in list(log.handlers):
-        h.close()
-        log.removeHandler(h)
-    # Rota a los ~2 MB para que el log no crezca sin límite dentro de la carpeta de música
-    handler = logging.handlers.RotatingFileHandler(
-        carpeta / "descarga.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    log.addHandler(handler)
+    ruta = os.path.abspath(carpeta / "descarga.log")
+    with _CANDADO_ARCHIVOS:
+        if any(getattr(h, "baseFilename", None) == ruta for h in log.handlers):
+            return log
+        for h in list(log.handlers):
+            h.close()
+            log.removeHandler(h)
+        # Rota a los ~2 MB para que el log no crezca sin límite dentro de la carpeta de música
+        handler = logging.handlers.RotatingFileHandler(
+            ruta, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        log.addHandler(handler)
     return log
 
 
@@ -616,13 +674,14 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
 
 
 def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
-                             extras=None, album_defecto="", organizar="plano"):
+                             extras=None, album_defecto="", organizar="plano",
+                             reservas=None, pausa=None):
     """Cadena de postprocesado, en orden: portada -> nombre/tags -> audio -> metadatos -> portada
     incrustada -> ReplayGain y aviso de 'listo'."""
     codec = "best" if cfg["formato"] == "original" else cfg["formato"]
     ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
     ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto,
-                                           organizar), when="pre_process")
+                                           organizar, reservas, pausa), when="pre_process")
     ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
                                         preferredquality=cfg["calidad"]))
     ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
@@ -651,15 +710,27 @@ def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None) -> dict:
                 "destino": destino, "entradas": pistas, "es_playlist": True,
                 "urls": [f"https://www.youtube.com/watch?v={p['id']}" for p in pistas],
                 "extras": {p["id"]: {k: p[k] for k in ("titulo", "artista", "album")} for p in pistas},
-                "album_defecto": titulo,
+                "album_defecto": titulo, "por_cancion": True,
             }
-    destino, entradas, es_playlist = analizar_url(url, carpeta, subcarpeta)
+    destino, entradas, es_playlist, titulo = analizar_url(url, carpeta, subcarpeta)
+    if es_playlist and entradas:
+        # Una URL por canción: así se pueden bajar varias a la vez
+        return {"destino": destino, "entradas": entradas, "es_playlist": True,
+                "urls": [e["url"] for e in entradas], "extras": {},
+                "album_defecto": titulo, "por_cancion": True}
     return {"destino": destino, "entradas": entradas, "es_playlist": es_playlist,
-            "urls": [url], "extras": {}, "album_defecto": ""}
+            "urls": [url], "extras": {}, "album_defecto": titulo, "por_cancion": False}
 
 
-def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
-    """Descarga una URL (video o playlist) y va enviando eventos a la interfaz."""
+def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=None):
+    """Descarga una URL (video o playlist) y va enviando eventos a la interfaz.
+
+    pausa: threading.Event; mientras esté activado, las descargas se detienen.
+    limite: semáforo compartido por toda la app con el máximo de canciones a la vez
+            (si no se pasa, se crea uno con cfg["descargas_simultaneas"])."""
+    n_simultaneas = descargas_simultaneas(cfg)
+    if limite is None:
+        limite = threading.BoundedSemaphore(n_simultaneas)
     carpeta = Path(cfg["carpeta"])
     carpeta.mkdir(parents=True, exist_ok=True)
     log = configurar_log(carpeta)
@@ -675,7 +746,7 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
             enlace = e.get("url") or (f"https://www.youtube.com/watch?v={id_video}"
                                       if id_video != "?" else "(desconocido)")
             cancion = " - ".join(x for x in (e.get("artista"), e.get("titulo")) if x)
-            with open(carpeta / "faltantes.txt", "a", encoding="utf-8") as f:
+            with _CANDADO_ARCHIVOS, open(carpeta / "faltantes.txt", "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now():%Y-%m-%d %H:%M}\n"
                         + (f"Canción: {cancion}\n" if cancion else "")
                         + f"URL: {enlace}\nMotivo: {motivo}\n---\n")
@@ -703,15 +774,14 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
         if e["id"] in ya_estan:
             emitir(("omitida", e["id"]))
     urls = plan["urls"]
-    if plan["extras"]:  # lista de canciones sueltas: no pedir las que ya están
+    if plan.get("por_cancion"):  # lista de canciones sueltas: no pedir las que ya están
         urls = [u for u, e in zip(urls, entradas) if e["id"] not in ya_estan]
 
     # 2) Hooks de progreso (con límite para no saturar la interfaz)
     ultimo = {}
 
     def hook_progreso(d):
-        if cancelar.is_set():
-            raise DownloadCancelled("Cancelado por el usuario")
+        esperar_si_pausa(pausa, cancelar)
         id_video = (d.get("info_dict") or {}).get("id")
         if not id_video:
             return
@@ -725,18 +795,51 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
             emitir(("estado", id_video, "Procesando…"))
 
     def hook_pp(d):
+        if d.get("status") == "started":
+            esperar_si_pausa(pausa, cancelar)
         etapa = ETAPAS.get(d.get("postprocessor"))
         id_video = (d.get("info_dict") or {}).get("id")
         if d.get("status") == "started" and etapa and id_video:
             emitir(("estado", id_video, etapa))
 
-    opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp, organizar)
     registro = []
-    with YoutubeDL(opciones) as ydl:
-        agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
-                                 plan["extras"], plan["album_defecto"], organizar)
-        if urls:
-            ydl.download(urls)
+    reservas = ReservaNombres()
+
+    def bajar(lote):
+        """Baja una canción (o la URL entera si no se pudo separar). Cada hilo usa su propio
+        YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app."""
+        with limite:
+            esperar_si_pausa(pausa, cancelar)
+            opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
+                                          organizar)
+            with YoutubeDL(opciones) as ydl:
+                agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
+                                         plan["extras"], plan["album_defecto"], organizar,
+                                         reservas, pausa)
+                ydl.download(lote)
+
+    def bajar_seguro(lote):
+        try:
+            bajar(lote)
+        except DownloadCancelled:
+            pass
+        except Exception as e:  # un fallo inesperado no debe tumbar las demás canciones
+            log.exception("Fallo inesperado")
+            al_fallar("?", str(e))
+
+    if urls:
+        if plan.get("por_cancion") and n_simultaneas > 1 and len(urls) > 1:
+            with ThreadPoolExecutor(max_workers=n_simultaneas) as pool:
+                list(pool.map(bajar_seguro, [[u] for u in urls]))
+        elif plan.get("por_cancion"):
+            for u in urls:
+                if cancelar.is_set():
+                    break
+                bajar_seguro([u])
+        else:
+            bajar_seguro(urls)
+    if cancelar.is_set():
+        raise DownloadCancelled("Cancelado por el usuario")
 
     # 3) Playlist/álbum: ahora que se conocen todas las pistas, se añade el ReplayGain de álbum
     if cfg["replaygain"] and es_playlist and len(registro) >= 2:
@@ -980,6 +1083,65 @@ def escribir_etiquetas(ruta, datos: dict, portada: bytes = None):
         audio.save()
     else:
         raise ValueError(f"el formato {ext} no se puede editar")
+
+
+# ==============================================================================
+# EXPORTAR LA LISTA (.m3u y .csv)
+# ==============================================================================
+COLUMNAS_CSV = [("num", "#"), ("estado", "Estado"), ("titulo", "Título"), ("artista", "Artista"),
+                ("album", "Álbum"), ("anio", "Año"), ("genero", "Género"), ("url", "Enlace"),
+                ("ruta", "Archivo"), ("motivo", "Motivo")]
+
+
+def duracion_segundos(ruta) -> int:
+    """Duración en segundos (o -1 si no se puede leer, como pide el formato M3U)."""
+    if HAY_MUTAGEN:
+        try:
+            audio = MutagenFile(ruta)
+            if audio is not None and audio.info is not None:
+                return int(round(audio.info.length))
+        except Exception:
+            pass
+    return -1
+
+
+def exportar_m3u(destino, canciones) -> int:
+    """Escribe una lista de reproducción M3U extendida (UTF-8) con las canciones que existen.
+    Las rutas quedan relativas a la carpeta de la lista cuando se puede, así la lista sigue
+    funcionando si se mueve toda la carpeta de música. Devuelve cuántas canciones escribió."""
+    destino = Path(destino)
+    base = destino.parent.resolve()
+    lineas = ["#EXTM3U"]
+    for c in canciones:
+        ruta = Path(c.get("ruta") or "")
+        if not c.get("ruta") or not ruta.is_file():
+            continue
+        try:
+            texto_ruta = os.path.relpath(ruta.resolve(), base)
+        except ValueError:  # otra unidad en Windows (C: vs D:)
+            texto_ruta = str(ruta.resolve())
+        nombre = " - ".join(x for x in (c.get("artista"), c.get("titulo")) if x) or ruta.stem
+        lineas.append(f"#EXTINF:{duracion_segundos(ruta)},{nombre}")
+        lineas.append(texto_ruta)
+    destino.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    return (len(lineas) - 1) // 2
+
+
+def _celda_csv(valor) -> str:
+    texto = "" if valor is None else str(valor)
+    # Evita que Excel interprete un título como "=…" como fórmula
+    return "'" + texto if texto[:1] in ("=", "+", "-", "@", "\t", "\r") else texto
+
+
+def exportar_csv(destino, filas) -> int:
+    """Escribe la lista como CSV. Usa ';' y UTF-8 con BOM para que Excel en español lo abra
+    directamente en columnas y con tildes. Devuelve cuántas filas escribió."""
+    with open(destino, "w", encoding="utf-8-sig", newline="") as f:
+        escritor = csv.writer(f, delimiter=";")
+        escritor.writerow([titulo for _, titulo in COLUMNAS_CSV])
+        for fila in filas:
+            escritor.writerow([_celda_csv(fila.get(clave, "")) for clave, _ in COLUMNAS_CSV])
+    return len(filas)
 
 
 # ==============================================================================

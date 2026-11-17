@@ -17,7 +17,11 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - Tags: title, artist, album, year and genre, plus embedded cover art (optionally cropped to a square).
 - **ReplayGain** (track and album) written as tags, without touching the audio, or **loudness normalization** (EBU R128, −14 LUFS), which re-encodes the audio. Only one of the two can be active.
 - Queue with per-song status (queued / downloading / done / error), thumbnails, progress bar and counters.
-- Retry failed songs (they go back to the same playlist subfolder), cancel, open link or folder.
+- Retry failed songs (they go back to the same playlist subfolder), open link or folder.
+- **Queue controls**: **pause / resume** all downloads (the current ones stop where they are and continue later) or cancel everything.
+- **Parallel downloads**: 1 to 3 songs at a time (*Configuración → Descargas simultáneas*, 2 by default). Playlists are split into songs so they also download in parallel.
+- **Filter and sort the list**: search box (title, artist, album), filter by status (downloaded / in progress / error) and click a column header to sort (click again to reverse, a third time to go back to arrival order). *Select all* and *Limpiar lista* act on the visible rows only, so filtering by "Con error" and pressing *Limpiar lista* removes just the failed ones.
+- **Export**: a `.m3u` playlist of the downloaded songs (relative paths, UTF-8) or a `.csv` table of the list (`;`-separated with BOM, opens directly in Excel in Spanish). Both follow the current filter and order.
 - **Tag editor**: fix the title, artist, album, year, genre or cover of a downloaded MP3, M4A or Opus file from the detail panel.
 - **yt-dlp updates**: YouTube changes often and old yt-dlp versions stop working. AUDYAX checks for a new version on startup (can be turned off in *Configuración*) and updates it with one click; restart the app afterwards.
 - Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
