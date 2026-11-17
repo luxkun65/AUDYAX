@@ -108,7 +108,8 @@ def test_actualizar_llama_a_pip(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
     monkeypatch.setattr(m.subprocess, "run", falso_run)
     assert m.actualizar_ytdlp() == (True, "yt-dlp se actualizó correctamente.")
-    assert llamado["cmd"][1:] == ["-m", "pip", "install", "-U", "yt-dlp"]
+    assert llamado["cmd"][1:6] == ["-m", "pip", "install", "-U", "yt-dlp"]
+    assert ("ytmusicapi" in llamado["cmd"]) == m.HAY_YTMUSIC
 
 
 def test_actualizar_informa_el_error_de_pip(monkeypatch):

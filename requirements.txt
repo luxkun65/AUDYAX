@@ -3,3 +3,4 @@ mutagen>=1.47
 customtkinter>=5.2
 pillow>=10.0
 tkinterdnd2>=0.4
+ytmusicapi>=1.8
