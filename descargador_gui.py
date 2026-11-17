@@ -73,6 +73,13 @@ C = {
     "rojo": ("#d63c2c", "#e74c3c"),
 }
 REPO_URL = "https://github.com/luxkun65/AUDYAX"
+
+# Opciones de "Organizar descargas" (Configuración): clave guardada -> texto y ejemplo
+ORGANIZAR = {
+    "plano": ("Todo junto (sin carpetas)", "Descargas/One More Time.mp3"),
+    "artista": ("Una carpeta por artista", "Descargas/Daft Punk/One More Time.mp3"),
+    "artista_album": ("Artista / Álbum", "Descargas/Daft Punk/Discovery/One More Time.mp3"),
+}
 COLORES = {"verde": "#2ecc71", "amarillo": "#f1c40f", "rojo": "#e74c3c"}
 
 # Ancho de cada columna de la lista (0 = ocupa el espacio sobrante)
@@ -912,7 +919,7 @@ class App(ctk.CTk, *_BASES_DND):
     def _configuracion(self):
         top = ctk.CTkToplevel(self)
         top.title("Configuración")
-        top.geometry("420x420")
+        top.geometry("440x580")
         top.resizable(False, False)
         top.transient(self)
         top.configure(fg_color=C["bg"])
@@ -931,6 +938,8 @@ class App(ctk.CTk, *_BASES_DND):
             side="left", padx=(0, 8))
         self._boton(fila, "Faltantes", lambda: self._abrir_archivo_carpeta("faltantes.txt"), height=32).pack(
             side="left")
+
+        self._seccion_organizar(top)
 
         ctk.CTkLabel(top, text="Portapapeles", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
         var_pp = tk.BooleanVar(value=self.cfg.get("detectar_portapapeles", True))
@@ -957,6 +966,37 @@ class App(ctk.CTk, *_BASES_DND):
         self._boton(top, "Buscar actualización", lambda: self._revisar_ytdlp(manual=True),
                     icono("refresh", 16), height=32).pack(anchor="w", padx=20, pady=(10, 0))
         self.after(150, top.focus)
+
+    def _seccion_organizar(self, top):
+        """Configuración > Organizar descargas (desactivado por defecto: todo junto)."""
+        ctk.CTkLabel(top, text="Organizar descargas", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
+        actual = self.cfg.get("organizar", "plano")
+        if actual not in ORGANIZAR:
+            actual = "plano"
+        por_texto = {texto: clave for clave, (texto, _) in ORGANIZAR.items()}
+        var_modo = tk.StringVar(value=ORGANIZAR[actual][0])
+        var_pl = tk.BooleanVar(value=self.cfg.get("playlists_en_carpeta", True))
+        ejemplo = ctk.CTkLabel(top, text="", font=self.f_peq, text_color=C["suave"], anchor="w")
+        sw_pl = ctk.CTkSwitch(top, text="Las playlists van juntas en su propia carpeta", variable=var_pl,
+                              font=self.f_norm, progress_color=C["acento"])
+
+        def aplicar(*_):
+            modo = por_texto.get(var_modo.get(), "plano")
+            self.cfg["organizar"] = modo
+            self.cfg["playlists_en_carpeta"] = bool(var_pl.get())
+            ejemplo.configure(text="Ejemplo:  " + ORGANIZAR[modo][1])
+            sw_pl.configure(state="disabled" if modo == "plano" else "normal")
+            guardar_config(self._cfg_actual())
+
+        ctk.CTkOptionMenu(top, variable=var_modo, values=[t for t, _ in ORGANIZAR.values()], width=260,
+                          height=32, font=self.f_norm, dropdown_font=self.f_norm, fg_color=C["input"],
+                          button_color=C["card2"], button_hover_color=C["hover"], text_color=C["texto"],
+                          dropdown_fg_color=C["card"], dropdown_text_color=C["texto"],
+                          dropdown_hover_color=C["hover"], command=aplicar).pack(anchor="w", padx=20)
+        ejemplo.pack(anchor="w", padx=20, pady=(6, 6))
+        sw_pl.configure(command=aplicar)
+        sw_pl.pack(anchor="w", padx=20)
+        aplicar()
 
     def _abrir_archivo_carpeta(self, nombre):
         ruta = Path(self.var_carpeta.get()) / nombre
@@ -1019,6 +1059,8 @@ class App(ctk.CTk, *_BASES_DND):
             "tema": self.tema,
             "revisar_ytdlp": bool(self.cfg.get("revisar_ytdlp", True)),
             "detectar_portapapeles": bool(self.cfg.get("detectar_portapapeles", True)),
+            "organizar": self.cfg.get("organizar", "plano"),
+            "playlists_en_carpeta": bool(self.cfg.get("playlists_en_carpeta", True)),
         }
 
     def _descargar(self):
