@@ -10,3 +10,7 @@ dist/
 # Entornos virtuales
 .venv/
 venv/
+
+# Ejecutable y FFmpeg descargado
+vendor/
+prueba-arranque.json

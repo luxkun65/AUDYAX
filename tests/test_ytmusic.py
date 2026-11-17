@@ -98,7 +98,7 @@ def test_pistas_ytmusic_sin_libreria(monkeypatch):
 # ------------------------------------------------------------------ resolver
 def test_resolver_playlist_ytmusic(tmp_path, monkeypatch):
     real = m.pistas_ytmusic
-    monkeypatch.setattr(m, "pistas_ytmusic", lambda url: real(url, ClienteFalso()))
+    monkeypatch.setattr(m, "pistas_ytmusic", lambda url, **kw: real(url, ClienteFalso()))
     plan = m.resolver("https://music.youtube.com/playlist?list=PL123", tmp_path)
     assert plan["destino"] == tmp_path / "Mi Playlist"
     assert plan["es_playlist"]
@@ -114,10 +114,10 @@ def test_resolver_playlist_ytmusic(tmp_path, monkeypatch):
 
 
 def test_resolver_si_ytmusic_falla_usa_ytdlp(tmp_path, monkeypatch):
-    def falla(url):
+    def falla(url, **kw):
         raise ConnectionError("sin internet")
     monkeypatch.setattr(m, "pistas_ytmusic", falla)
-    monkeypatch.setattr(m, "analizar_url", lambda url, carpeta, sub: (carpeta, [], True, ""))
+    monkeypatch.setattr(m, "analizar_url", lambda url, carpeta, sub, *a: (carpeta, [], True, ""))
     plan = m.resolver("https://music.youtube.com/playlist?list=PL123", tmp_path)
     assert plan["urls"] == ["https://music.youtube.com/playlist?list=PL123"]
     assert plan["extras"] == {}
@@ -126,7 +126,7 @@ def test_resolver_si_ytmusic_falla_usa_ytdlp(tmp_path, monkeypatch):
 def test_resolver_quita_la_radio(tmp_path, monkeypatch):
     vistas = []
     monkeypatch.setattr(m, "analizar_url",
-                        lambda url, carpeta, sub: vistas.append(url) or (carpeta, [], False, ""))
+                        lambda url, carpeta, sub, *a: vistas.append(url) or (carpeta, [], False, ""))
     plan = m.resolver("https://music.youtube.com/watch?v=abc&list=RDAMVMabc", tmp_path)
     assert vistas == plan["urls"] == ["https://www.youtube.com/watch?v=abc"]
 
