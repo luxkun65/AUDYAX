@@ -361,14 +361,41 @@ class FilaLista:
                 if boton:
                     w.bind(boton, lambda e: app._menu_fila(vid, e), add=True)
 
+        # Pasar el mouse por el estado de una canción en cola/descargándose lo convierte en
+        # "✕ Cancelar"; un clic ahí la cancela (sin tener que seleccionarla ni marcarla).
+        self._sobre_estado = False
+        self.l_estado.bind("<Enter>", lambda e: self._hover_estado(True), add=True)
+        self.l_estado.bind("<Leave>", lambda e: self._hover_estado(False), add=True)
+        self.l_estado.bind("<Button-1>", self._clic_estado, add=True)
+
+    def _cancelable(self) -> bool:
+        f = self.app.filas.get(self.vid)
+        return bool(f) and f["color"] == "amarillo"
+
+    def _hover_estado(self, dentro: bool):
+        self._sobre_estado = dentro
+        if self.vid in self.app.filas:
+            self._pintar_estado(self.app.filas[self.vid])
+
+    def _pintar_estado(self, f):
+        if self._sobre_estado and f["color"] == "amarillo":
+            self._set("estado", self.l_estado, text="  Cancelar", image=self.app.ico_estado["rojo"],
+                      text_color=COLORES["rojo"], cursor="hand2")
+        else:
+            self._set("estado", self.l_estado, text="  " + corto(f["texto"], 20),
+                      image=self.app.ico_estado[f["color"]], text_color=C["texto"], cursor="")
+
+    def _clic_estado(self, _evento=None):
+        if self._cancelable():
+            self.app._cancelar_canciones([self.vid])
+
     def _set(self, clave, widget, **kw):
         if self._ult.get(clave) != kw:
             widget.configure(**kw)
             self._ult[clave] = kw
 
     def actualizar(self, f):
-        self._set("estado", self.l_estado, text="  " + corto(f["texto"], 20),
-                  image=self.app.ico_estado[f["color"]])
+        self._pintar_estado(f)
         self._set("titulo", self.l_titulo, text=corto(f["titulo"], 34))
         # 19 caracteres caben en la columna; más largo la ensancha y desalinea la fila
         self._set("artista", self.l_artista, text=corto(f["artista"] or "—", 19))
@@ -1347,8 +1374,12 @@ class App(ctk.CTk, *_BASES_DND):
         self._actualizar_botones()
 
     def _cancelar_canciones(self, vids=None):
-        """Cancela solo las canciones marcadas (o la seleccionada), sin tocar las demás."""
-        candidatas = vids or self._marcadas() or ([self.sel] if self.sel in self.filas else [])
+        """Cancela la canción seleccionada (la de color morado) y, si hay, las marcadas con la
+        casilla. No hace falta marcar nada: basta con seleccionarla. Las demás siguen."""
+        if vids is None:
+            vids = ([self.sel] if self.sel in self.filas else []) + \
+                   [v for v in self._marcadas() if v != self.sel]
+        candidatas = vids
         validas = [v for v in candidatas if v in self.filas and self.filas[v]["color"] == "amarillo"]
         if not validas:
             messagebox.showinfo("Cancelar", "Solo se pueden cancelar canciones en cola o descargándose.")
