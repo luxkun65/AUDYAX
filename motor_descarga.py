@@ -9,6 +9,7 @@ Requisitos:
     pip install -U yt-dlp mutagen
     ffmpeg instalado y en el PATH
 """
+import base64
 import json
 import logging
 import logging.handlers
@@ -17,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -32,9 +34,10 @@ from yt_dlp.utils import sanitize_filename
 
 try:
     from mutagen import File as MutagenFile
-    from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
+    from mutagen.flac import Picture
+    from mutagen.id3 import APIC, ID3, TALB, TCON, TDRC, TIT2, TPE1, TXXX, ID3NoHeaderError
     from mutagen.mp3 import MP3
-    from mutagen.mp4 import MP4, AtomDataType, MP4FreeForm
+    from mutagen.mp4 import MP4, AtomDataType, MP4Cover, MP4FreeForm
     from mutagen.oggopus import OggOpus
     HAY_MUTAGEN = True
 except ImportError:
@@ -57,6 +60,8 @@ CONFIG_POR_DEFECTO = {
     "recorte": True,
     "replaygain": True,
     "tema": "dark",
+    "revisar_ytdlp": True,           # avisar al abrir si hay una versión nueva de yt-dlp
+    "detectar_portapapeles": True,   # ofrecer pegar un enlace de YouTube copiado
 }
 
 # ==============================================================================
@@ -554,6 +559,237 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
                 emitir(("rg", r["id"], texto_rg(r["datos"], album)))
             except Exception as e:
                 log.warning(f"ReplayGain de álbum falló en {r['ruta']}: {e}")
+
+
+# ==============================================================================
+# DETECCIÓN DE ENLACES (portapapeles y arrastrar/soltar)
+# ==============================================================================
+_RE_YOUTUBE = re.compile(
+    r"^https?://(?:www\.|m\.|music\.)?"
+    r"(?:youtube\.com/(?:watch\?|playlist\?|shorts/|live/|browse/)|youtu\.be/[\w-])",
+    re.IGNORECASE)
+
+
+def es_enlace_youtube(texto: str) -> bool:
+    """True si el texto es (solo) un enlace de YouTube o YouTube Music."""
+    t = (texto or "").strip()
+    return bool(t) and " " not in t and "\n" not in t and bool(_RE_YOUTUBE.match(t))
+
+
+def extraer_enlaces(texto: str) -> list:
+    """Enlaces de YouTube dentro de un texto cualquiera (p. ej. lo que llega al soltar
+    algo en la ventana, que puede venir entre llaves o como lista de URLs). Sin repetidos."""
+    vistos, enlaces = set(), []
+    for crudo in re.findall(r"https?://[^\s{}<>\"']+", texto or ""):
+        url = crudo.rstrip(".,;)")
+        if es_enlace_youtube(url) and url not in vistos:
+            vistos.add(url)
+            enlaces.append(url)
+    return enlaces
+
+
+# ==============================================================================
+# BÚSQUEDA POR NOMBRE ("artista canción")
+# ==============================================================================
+def _duracion_texto(seg) -> str:
+    try:
+        seg = int(seg)
+    except (TypeError, ValueError):
+        return ""
+    h, resto = divmod(seg, 3600)
+    return f"{h}:{resto // 60:02d}:{resto % 60:02d}" if h else f"{resto // 60}:{resto % 60:02d}"
+
+
+def _resultado(e: dict) -> dict:
+    datos = _entrada(e)
+    datos["canal"] = re.sub(r"\s*-\s*Topic$", "", e.get("channel") or e.get("uploader") or "")
+    datos["duracion"] = _duracion_texto(e.get("duration"))
+    if not datos["miniatura"]:
+        datos["miniatura"] = f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg"
+    return datos
+
+
+def buscar(texto: str, cantidad: int = 10) -> list:
+    """Busca en YouTube y devuelve una lista de resultados
+    (id, titulo, url, miniatura, canal, duracion). Lanza la excepción si falla."""
+    texto = (texto or "").strip()
+    if not texto:
+        return []
+    opciones = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
+                "logger": _Silencio()}
+    with YoutubeDL(opciones) as ydl:
+        info = ydl.extract_info(f"ytsearch{int(cantidad)}:{texto}", download=False)
+    return [_resultado(e) for e in (info or {}).get("entries") or []
+            if e and e.get("id") and e.get("ie_key") in (None, "Youtube")]
+
+
+# ==============================================================================
+# ACTUALIZAR yt-dlp
+# ==============================================================================
+def version_ytdlp() -> str:
+    from yt_dlp.version import __version__
+    return __version__
+
+
+def _como_tupla(version: str) -> tuple:
+    return tuple(int(p) for p in re.findall(r"\d+", version or ""))
+
+
+def es_mas_nueva(candidata: str, actual: str) -> bool:
+    return _como_tupla(candidata) > _como_tupla(actual)
+
+
+def ultima_version_ytdlp(timeout: int = 8) -> str:
+    """Última versión publicada en PyPI. Lanza la excepción si no hay conexión."""
+    req = urllib.request.Request("https://pypi.org/pypi/yt-dlp/json",
+                                 headers={"User-Agent": "AUDYAX"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))["info"]["version"]
+
+
+def puede_actualizarse() -> bool:
+    """En el ejecutable de PyInstaller yt-dlp va empaquetado y pip no puede cambiarlo."""
+    return not getattr(sys, "frozen", False)
+
+
+def actualizar_ytdlp() -> tuple:
+    """Actualiza yt-dlp con pip. Devuelve (ok, mensaje). Hay que reiniciar la app
+    para que se use la versión nueva (la vieja ya está cargada en memoria)."""
+    if not puede_actualizarse():
+        return False, ("Esta es la versión empaquetada (.exe): yt-dlp va dentro del programa. "
+                       "Descarga una versión nueva de AUDYAX para actualizarlo.")
+    extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform.startswith("win") else {}
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=600, **extra)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    if r.returncode != 0:
+        lineas = (r.stderr or r.stdout or "").strip().splitlines()
+        return False, "\n".join(lineas[-6:]) or f"pip terminó con código {r.returncode}"
+    return True, "yt-dlp se actualizó correctamente."
+
+
+# ==============================================================================
+# EDITOR DE ETIQUETAS (archivos ya descargados)
+# ==============================================================================
+CAMPOS_ETIQUETA = ("titulo", "artista", "album", "anio", "genero")
+FORMATOS_EDITABLES = (".mp3", ".m4a", ".mp4", ".opus")
+
+_ID3 = {"titulo": TIT2, "artista": TPE1, "album": TALB, "anio": TDRC, "genero": TCON} if HAY_MUTAGEN else {}
+_MP4 = {"titulo": "\xa9nam", "artista": "\xa9ART", "album": "\xa9alb", "anio": "\xa9day", "genero": "\xa9gen"}
+_VORBIS = {"titulo": "title", "artista": "artist", "album": "album", "anio": "date", "genero": "genre"}
+
+
+def se_puede_editar(ruta) -> bool:
+    return HAY_MUTAGEN and Path(ruta).suffix.lower() in FORMATOS_EDITABLES
+
+
+def _primero(valor) -> str:
+    if isinstance(valor, (list, tuple)):
+        valor = valor[0] if valor else ""
+    return str(valor or "")
+
+
+def leer_etiquetas(ruta) -> dict:
+    """Título, artista, álbum, año y género que tiene guardados el archivo."""
+    ruta = Path(ruta)
+    ext = ruta.suffix.lower()
+    datos = dict.fromkeys(CAMPOS_ETIQUETA, "")
+    if ext == ".mp3":
+        try:
+            tags = ID3(ruta)
+        except ID3NoHeaderError:
+            return datos
+        for campo, clase in _ID3.items():
+            marco = tags.get(clase.__name__)
+            if marco is not None and marco.text:
+                datos[campo] = str(marco.text[0])
+    elif ext in (".m4a", ".mp4"):
+        tags = MP4(ruta).tags or {}
+        for campo, clave in _MP4.items():
+            datos[campo] = _primero(tags.get(clave))
+    elif ext == ".opus":
+        audio = OggOpus(ruta)
+        for campo, clave in _VORBIS.items():
+            datos[campo] = _primero(audio.get(clave))
+    else:
+        raise ValueError(f"el formato {ext} no se puede editar")
+    datos["anio"] = datos["anio"][:4] if re.match(r"\d{4}", datos["anio"]) else datos["anio"]
+    return datos
+
+
+def leer_portada(ruta):
+    """Bytes de la portada incrustada, o None si no tiene."""
+    ruta = Path(ruta)
+    ext = ruta.suffix.lower()
+    try:
+        if ext == ".mp3":
+            fotos = ID3(ruta).getall("APIC")
+            return bytes(fotos[0].data) if fotos else None
+        if ext in (".m4a", ".mp4"):
+            portadas = (MP4(ruta).tags or {}).get("covr")
+            return bytes(portadas[0]) if portadas else None
+        if ext == ".opus":
+            bloques = OggOpus(ruta).get("metadata_block_picture")
+            return Picture(base64.b64decode(bloques[0])).data if bloques else None
+    except Exception:
+        return None
+    return None
+
+
+def escribir_etiquetas(ruta, datos: dict, portada: bytes = None):
+    """Guarda los campos indicados (un texto vacío borra la etiqueta) y, si se pasa,
+    reemplaza la portada (bytes JPEG). No toca el audio ni el ReplayGain."""
+    if not HAY_MUTAGEN:
+        raise RuntimeError("falta mutagen (pip install mutagen)")
+    ruta = Path(ruta)
+    ext = ruta.suffix.lower()
+    campos = {k: (str(v).strip() if v is not None else "") for k, v in datos.items()
+              if k in CAMPOS_ETIQUETA}
+
+    if ext == ".mp3":
+        audio = MP3(ruta, ID3=ID3)
+        if audio.tags is None:
+            audio.add_tags()
+        for campo, valor in campos.items():
+            clase = _ID3[campo]
+            audio.tags.delall(clase.__name__)
+            if valor:
+                audio.tags.add(clase(encoding=3, text=[valor]))
+        if portada:
+            audio.tags.delall("APIC")
+            audio.tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=portada))
+        audio.save(v2_version=3)
+    elif ext in (".m4a", ".mp4"):
+        audio = MP4(ruta)
+        if audio.tags is None:
+            audio.add_tags()
+        for campo, valor in campos.items():
+            clave = _MP4[campo]
+            if valor:
+                audio.tags[clave] = [valor]
+            elif clave in audio.tags:
+                del audio.tags[clave]
+        if portada:
+            audio.tags["covr"] = [MP4Cover(portada, imageformat=MP4Cover.FORMAT_JPEG)]
+        audio.save()
+    elif ext == ".opus":
+        audio = OggOpus(ruta)
+        for campo, valor in campos.items():
+            clave = _VORBIS[campo]
+            if valor:
+                audio[clave] = [valor]
+            elif clave in audio:
+                del audio[clave]
+        if portada:
+            foto = Picture()
+            foto.type, foto.mime, foto.desc, foto.data = 3, "image/jpeg", "Cover", portada
+            audio["metadata_block_picture"] = [base64.b64encode(foto.write()).decode("ascii")]
+        audio.save()
+    else:
+        raise ValueError(f"el formato {ext} no se puede editar")
 
 
 # ==============================================================================
