@@ -356,6 +356,10 @@ class FilaLista:
                   self.l_album, self.l_anio, self.l_enlace):
             w.bind("<Button-1>", lambda e: app._seleccionar(vid), add=True)
             w.bind("<Double-Button-1>", lambda e: app._abrir_enlace(vid), add=True)
+            # Clic derecho (Button-2 en macOS): menú con las acciones de esa canción
+            for boton in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
+                if boton:
+                    w.bind(boton, lambda e: app._menu_fila(vid, e), add=True)
 
     def _set(self, clave, widget, **kw):
         if self._ult.get(clave) != kw:
@@ -644,6 +648,7 @@ class App(ctk.CTk, *_BASES_DND):
         self.eventos = queue.Queue()   # worker -> interfaz
         self.trabajos = queue.Queue()  # interfaz -> worker
         self.pausa = threading.Event()        # activado = descargas en pausa
+        self.duenos = {}                      # id de canción -> conjunto 'omitir' de su trabajo
         self.tokens = set()                   # un Event de cancelación por trabajo en curso
         self.candado_tokens = threading.Lock()
         self.hilos = []                       # hilos que atienden la cola de trabajos
@@ -876,12 +881,15 @@ class App(ctk.CTk, *_BASES_DND):
 
         self.det_botones = ctk.CTkFrame(det, fg_color="transparent")
         self.det_botones.pack(fill="x", padx=12, pady=(2, 10))
+        # width pequeño: cada botón mide lo que su texto (si no, todos miden 140 y no caben)
         for texto, ico, cmd in [("Copiar enlace", "copy", self._copiar_enlace),
                                 ("Abrir enlace", "external", lambda: self._abrir_enlace()),
-                                ("Abrir carpeta", "folder", self._abrir_carpeta_cancion),
-                                ("Editar etiquetas", "edit", self._editar_etiquetas),
-                                ("Reintentar", "refresh", self._reintentar)]:
-            self._boton(self.det_botones, texto, cmd, icono(ico, 16), height=34).pack(side="left", padx=(0, 8))
+                                ("Carpeta", "folder", self._abrir_carpeta_cancion),
+                                ("Etiquetas", "edit", self._editar_etiquetas),
+                                ("Reintentar", "refresh", self._reintentar),
+                                ("Cancelar", "cancel", self._cancelar_canciones)]:
+            self._boton(self.det_botones, texto, cmd, icono(ico, 16), height=34, width=60).pack(
+                side="left", padx=(0, 8))
         self._boton(self.det_botones, "Limpiar lista", self._limpiar_lista, icono("trash", 16),
                     height=34).pack(side="right")
 
@@ -1272,7 +1280,7 @@ class App(ctk.CTk, *_BASES_DND):
             return
         self._cerrar()
 
-    def _encolar(self, url: str, subcarpeta: str = "") -> bool:
+    def _encolar(self, url: str, subcarpeta: str = "", extras=None) -> bool:
         cfg = self._cfg_actual()
         if not cfg["carpeta"]:
             messagebox.showwarning("Falta la carpeta", "Elige dónde guardar las canciones.")
@@ -1284,6 +1292,7 @@ class App(ctk.CTk, *_BASES_DND):
             return False
         guardar_config(cfg)
         cfg["subcarpeta"] = subcarpeta  # p. ej. la carpeta de la playlist al reintentar
+        cfg["extras"] = extras or {}    # título/artista/álbum a conservar (ver _reintentar)
         self.pendientes += 1
         self.trabajos.put((url, cfg))
         self._asegurar_hilos()
@@ -1304,10 +1313,16 @@ class App(ctk.CTk, *_BASES_DND):
         while True:
             url, cfg = self.trabajos.get()
             token = threading.Event()  # cancelación propia de este trabajo
+            omitir = set()             # canciones de este trabajo canceladas una a una
+
+            def emitir(ev, omitir=omitir):
+                if ev[0] == "nuevo":   # esta canción la baja este trabajo
+                    self.duenos[ev[1]] = omitir
+                self.eventos.put(ev)
             with self.candado_tokens:
                 self.tokens.add(token)
             try:
-                ejecutar_trabajo(url, cfg, self.eventos.put, token, self.pausa, self.limite)
+                ejecutar_trabajo(url, cfg, emitir, token, self.pausa, self.limite, omitir)
             except DownloadCancelled:
                 self.eventos.put(("cancelado",))
             except Exception as e:
@@ -1330,6 +1345,51 @@ class App(ctk.CTk, *_BASES_DND):
         if self.pausa.is_set():
             self._alternar_pausa()  # al cancelar, se sale de la pausa
         self._actualizar_botones()
+
+    def _cancelar_canciones(self, vids=None):
+        """Cancela solo las canciones marcadas (o la seleccionada), sin tocar las demás."""
+        candidatas = vids or self._marcadas() or ([self.sel] if self.sel in self.filas else [])
+        validas = [v for v in candidatas if v in self.filas and self.filas[v]["color"] == "amarillo"]
+        if not validas:
+            messagebox.showinfo("Cancelar", "Solo se pueden cancelar canciones en cola o descargándose.")
+            return
+        for vid in validas:
+            dueno = self.duenos.get(vid)
+            if dueno is not None:
+                dueno.add(vid)  # el motor la salta o la corta en el próximo aviso de progreso
+            f = self.filas[vid]
+            f["texto_previo"] = ""
+            self._fila(vid, color="rojo", texto="Cancelada", motivo="Cancelada por el usuario")
+            f["cancelada"] = True
+
+    def _nuevo_menu(self) -> tk.Menu:
+        """Menú emergente con los colores del tema actual (claro u oscuro)."""
+        i = 1 if self.tema == "dark" else 0
+        return tk.Menu(self, tearoff=0, bg=C["card"][i], fg=C["texto"][i], activebackground=C["sel"][i],
+                       activeforeground=C["texto"][i], disabledforeground=C["suave"][i],
+                       relief="flat", borderwidth=1, font=(self.f_norm.cget("family"), 11))
+
+    def _menu_fila(self, vid, evento):
+        """Menú de clic derecho sobre una canción de la lista."""
+        if vid not in self.filas:
+            return
+        self._seleccionar(vid)
+        f = self.filas[vid]
+        menu = self._nuevo_menu()
+        if f["color"] == "amarillo":
+            menu.add_command(label="Cancelar esta canción", command=lambda: self._cancelar_canciones([vid]))
+        if f["color"] == "rojo" and f["url"]:
+            menu.add_command(label="Reintentar", command=self._reintentar)
+        if f["color"] == "verde" and f["ruta"]:
+            menu.add_command(label="Editar etiquetas", command=self._editar_etiquetas)
+            menu.add_command(label="Abrir carpeta", command=self._abrir_carpeta_cancion)
+        if f["url"]:
+            if menu.index("end") is not None:
+                menu.add_separator()
+            menu.add_command(label="Copiar enlace", command=self._copiar_enlace)
+            menu.add_command(label="Abrir enlace", command=lambda: self._abrir_enlace(vid))
+        if menu.index("end") is not None:
+            menu.tk_popup(evento.x_root, evento.y_root)
 
     def _alternar_pausa(self):
         if self.pausa.is_set():
@@ -1529,7 +1589,7 @@ class App(ctk.CTk, *_BASES_DND):
 
     # ---------------------------------------------------------------- exportar
     def _menu_exportar(self):
-        menu = tk.Menu(self, tearoff=0)
+        menu = self._nuevo_menu()
         menu.add_command(label="Lista de reproducción (.m3u) de las descargadas", command=self._exportar_m3u)
         menu.add_command(label="Tabla (.csv) de la lista", command=self._exportar_csv)
         b = self.btn_exportar
@@ -1596,9 +1656,13 @@ class App(ctk.CTk, *_BASES_DND):
 
     def _manejar(self, ev):
         tipo = ev[0]
+        cancelada = tipo in ("info", "estado", "error", "rg") and self.filas.get(
+            ev[1] if len(ev) > 1 else None, {}).get("cancelada")
+        if cancelada:
+            return  # avisos atrasados de una canción que el usuario canceló
         if tipo == "nuevo":
             if ev[1] in self.filas:  # reintento: se vuelven a leer los datos del archivo
-                self.filas[ev[1]].update(datos=None, datos_pedidos=False)
+                self.filas[ev[1]].update(datos=None, datos_pedidos=False, cancelada=False)
             self._fila(ev[1], color="amarillo", texto="En cola", motivo="", ruta="", **ev[2])
         elif tipo == "info":
             self._fila(ev[1], **ev[2])
@@ -1606,6 +1670,8 @@ class App(ctk.CTk, *_BASES_DND):
             if self.filas.get(ev[1], {}).get("color") != "rojo":
                 self._fila(ev[1], color="amarillo", texto=ev[2])
         elif tipo == "listo":
+            if ev[1] in self.filas:
+                self.filas[ev[1]]["cancelada"] = False  # terminó justo antes de cancelarla
             self._fila(ev[1], color="verde", texto="Descargada", motivo="", **ev[2])
         elif tipo == "rg":
             self._fila(ev[1], replaygain=ev[2])
@@ -1819,8 +1885,14 @@ class App(ctk.CTk, *_BASES_DND):
             messagebox.showinfo("Reintentar", "Solo se pueden reintentar canciones con error que tengan enlace.")
             return
         for vid in validas:
+            f = self.filas[vid]
+            # Si venía de una playlist de YouTube Music se conservan su título, artista y álbum
+            # (al bajarla sola, yt-dlp pondría los del video: "(Official Video)", "ArtistaVEVO"…)
+            extras = None
+            if f["url"].startswith("https://music.youtube.com/"):
+                extras = {vid: {k: f[k] for k in ("titulo", "artista", "album")}}
             # Se reintenta en la misma subcarpeta (la de su playlist, si venía de una)
-            self._encolar(self.filas[vid]["url"], self.filas[vid]["subcarpeta"])
+            self._encolar(f["url"], f["subcarpeta"], extras)
 
     # ---------------------------------------------------------------- cierre
     def _cerrar(self):

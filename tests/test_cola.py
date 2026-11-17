@@ -242,3 +242,70 @@ def test_cancelar_durante_la_pausa(servidor, tmp_path, monkeypatch):
     hilo.join(10)
     assert not hilo.is_alive() and resultado.get("cancelado")
     assert not list(tmp_path.glob("**/*.mp3"))
+
+
+# ------------------------------------------------------------------ cancelar una sola canción
+def test_esperar_si_pausa_cancelacion_individual():
+    pausa, omitir = threading.Event(), set()
+    m.esperar_si_pausa(None, None, "a", omitir)  # no está en omitir: sigue
+    omitir.add("a")
+    with pytest.raises(m.DownloadCancelled):
+        m.esperar_si_pausa(None, None, "a", omitir)
+    m.esperar_si_pausa(None, None, "b", omitir)  # las demás siguen
+
+    pausa.set()  # en pausa, cancelar una canción la despierta (y solo a ella)
+    omitir2 = set()
+    threading.Timer(0.3, lambda: omitir2.add("x")).start()
+    with pytest.raises(m.DownloadCancelled):
+        m.esperar_si_pausa(pausa, None, "x", omitir2)
+
+
+@necesita_ffmpeg
+@pytest.mark.parametrize("n", [1, 2])
+def test_cancelar_canciones_sueltas(servidor, tmp_path, monkeypatch, n):
+    """Se corta pista1 a mitad de descarga y pista3 antes de empezar; las demás terminan."""
+    monkeypatch.setattr(m, "resolver", _plan_playlist(servidor))
+    omitir, eventos = set(), []
+
+    def emitir(ev):
+        eventos.append(ev)
+        if ev[0] == "estado" and ev[1] == "pista1" and str(ev[2]).startswith("Descargando"):
+            omitir.update({"pista1", "pista3"})
+    cfg = dict(m.CONFIG_POR_DEFECTO, carpeta=str(tmp_path), formato="mp3", replaygain=False,
+               descargas_simultaneas=n)
+    m.ejecutar_trabajo("x", cfg, emitir, threading.Event(), None, None, omitir)  # no lanza
+    listos = sorted(e[1] for e in eventos if e[0] == "listo")
+    assert listos == ["pista2", "pista4"]
+    assert sorted(p.name for p in (tmp_path / "Lista").glob("*.mp3")) == ["Pista 2.mp3", "Pista 4.mp3"]
+    assert not [e for e in eventos if e[0] == "error"]  # cancelar no es un error
+    archivo = (tmp_path / "descargados.txt").read_text(encoding="utf-8")
+    assert "pista1" not in archivo and "pista3" not in archivo  # se pueden reintentar
+
+
+@necesita_ffmpeg
+def test_cancelar_una_estando_en_pausa(servidor, tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "resolver", _plan_playlist(servidor, 2))
+    pausa, omitir, eventos = threading.Event(), set(), []
+    pausa.set()
+    cfg = dict(m.CONFIG_POR_DEFECTO, carpeta=str(tmp_path), formato="mp3", replaygain=False)
+    hilo = threading.Thread(target=m.ejecutar_trabajo,
+                            args=("x", cfg, eventos.append, threading.Event(), pausa, None, omitir))
+    hilo.start()
+    time.sleep(1)
+    omitir.add("pista1")
+    time.sleep(0.5)
+    pausa.clear()
+    hilo.join(60)
+    assert sorted(e[1] for e in eventos if e[0] == "listo") == ["pista2"]
+
+
+@necesita_ffmpeg
+def test_reintento_conserva_datos_de_youtube_music(servidor, tmp_path, monkeypatch):
+    """Al reintentar sola una canción de YouTube Music se usan sus datos, no los del video."""
+    eventos = []
+    cfg = dict(m.CONFIG_POR_DEFECTO, carpeta=str(tmp_path), formato="mp3", replaygain=False,
+               extras={"pista3": {"titulo": "Canción Buena", "artista": "Artista", "album": "Disco"}})
+    m.ejecutar_trabajo(f"{servidor}/pista3.m4a", cfg, eventos.append, threading.Event())
+    listo = [e[2] for e in eventos if e[0] == "listo"][0]
+    assert (listo["titulo"], listo["artista"], listo["album"]) == ("Canción Buena", "Artista", "Disco")
+    assert Path(listo["ruta"]).name == "Canción Buena.mp3"

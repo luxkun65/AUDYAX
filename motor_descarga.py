@@ -103,15 +103,21 @@ def descargas_simultaneas(cfg: dict) -> int:
     return max(1, min(MAX_SIMULTANEAS, n))
 
 
-def esperar_si_pausa(pausa, cancelar):
+def esperar_si_pausa(pausa, cancelar, id_video=None, omitir=None):
     """Si está en pausa, se queda esperando aquí (sin consumir CPU) hasta reanudar.
     Cancelar también despierta la espera. yt-dlp llama a los hooks de progreso muy a menudo,
-    así que bloquearlos detiene la descarga en curso; al reanudar, sigue donde iba."""
+    así que bloquearlos detiene la descarga en curso; al reanudar, sigue donde iba.
+
+    omitir: conjunto de ids cancelados uno a uno desde la interfaz. Si id_video está ahí,
+    se corta solo esa canción (cada canción usa su propio YoutubeDL)."""
+    def cancelada():
+        return ((cancelar is not None and cancelar.is_set())
+                or (omitir is not None and id_video is not None and id_video in omitir))
     while pausa is not None and pausa.is_set():
-        if cancelar is not None and cancelar.is_set():
+        if cancelada():
             break
         time.sleep(0.2)
-    if cancelar is not None and cancelar.is_set():
+    if cancelada():
         raise DownloadCancelled("Cancelado por el usuario")
 
 
@@ -204,10 +210,11 @@ class LimpiarMetadata(PostProcessor):
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
 
     def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto="",
-                 organizar="plano", reservas=None, pausa=None):
+                 organizar="plano", reservas=None, pausa=None, omitir=None):
         super().__init__(downloader)
         self.reservas = reservas or ReservaNombres()
         self.pausa = pausa
+        self.omitir = omitir
         self.destino = destino
         self.organizar = organizar
         self.emitir = emitir
@@ -218,7 +225,7 @@ class LimpiarMetadata(PostProcessor):
         self.album_defecto = album_defecto
 
     def run(self, info):
-        esperar_si_pausa(self.pausa, self.cancelar)
+        esperar_si_pausa(self.pausa, self.cancelar, info.get("id"), self.omitir)
 
         extra = self.extras.get(info.get("id")) or {}
         if extra.get("titulo"):
@@ -675,13 +682,13 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
 
 def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
                              extras=None, album_defecto="", organizar="plano",
-                             reservas=None, pausa=None):
+                             reservas=None, pausa=None, omitir=None):
     """Cadena de postprocesado, en orden: portada -> nombre/tags -> audio -> metadatos -> portada
     incrustada -> ReplayGain y aviso de 'listo'."""
     codec = "best" if cfg["formato"] == "original" else cfg["formato"]
     ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
     ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto,
-                                           organizar, reservas, pausa), when="pre_process")
+                                           organizar, reservas, pausa, omitir), when="pre_process")
     ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
                                         preferredquality=cfg["calidad"]))
     ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
@@ -722,12 +729,16 @@ def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None) -> dict:
             "urls": [url], "extras": {}, "album_defecto": titulo, "por_cancion": False}
 
 
-def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=None):
+def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=None, omitir=None):
     """Descarga una URL (video o playlist) y va enviando eventos a la interfaz.
 
     pausa: threading.Event; mientras esté activado, las descargas se detienen.
     limite: semáforo compartido por toda la app con el máximo de canciones a la vez
-            (si no se pasa, se crea uno con cfg["descargas_simultaneas"])."""
+            (si no se pasa, se crea uno con cfg["descargas_simultaneas"]).
+    omitir: conjunto de ids que la interfaz cancela uno a uno; se puede ir llenando mientras
+            el trabajo corre (las que aún no empezaron se saltan, la que está en curso se corta)."""
+    if omitir is None:
+        omitir = set()
     n_simultaneas = descargas_simultaneas(cfg)
     if limite is None:
         limite = threading.BoundedSemaphore(n_simultaneas)
@@ -757,6 +768,8 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
 
     # 1) Mostrar de inmediato todas las canciones (amarillas, "en cola")
     plan = resolver(url, carpeta, cfg.get("subcarpeta") or "", log)
+    if cfg.get("extras"):  # p. ej. al reintentar una canción que venía de YouTube Music
+        plan["extras"] = {**cfg["extras"], **plan["extras"]}
     destino, entradas, es_playlist = plan["destino"], plan["entradas"], plan["es_playlist"]
     organizar = modo_organizar(cfg, es_playlist)
     if es_playlist and organizar != "plano":
@@ -773,16 +786,17 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
         emitir(("nuevo", e["id"], datos))
         if e["id"] in ya_estan:
             emitir(("omitida", e["id"]))
-    urls = plan["urls"]
     if plan.get("por_cancion"):  # lista de canciones sueltas: no pedir las que ya están
-        urls = [u for u, e in zip(urls, entradas) if e["id"] not in ya_estan]
+        lotes = [([u], e["id"]) for u, e in zip(plan["urls"], entradas) if e["id"] not in ya_estan]
+    else:
+        lotes = [(plan["urls"], None)]
 
     # 2) Hooks de progreso (con límite para no saturar la interfaz)
     ultimo = {}
 
     def hook_progreso(d):
-        esperar_si_pausa(pausa, cancelar)
         id_video = (d.get("info_dict") or {}).get("id")
+        esperar_si_pausa(pausa, cancelar, id_video, omitir)
         if not id_video:
             return
         if d["status"] == "downloading":
@@ -795,49 +809,50 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
             emitir(("estado", id_video, "Procesando…"))
 
     def hook_pp(d):
-        if d.get("status") == "started":
-            esperar_si_pausa(pausa, cancelar)
         etapa = ETAPAS.get(d.get("postprocessor"))
         id_video = (d.get("info_dict") or {}).get("id")
+        if d.get("status") == "started":
+            esperar_si_pausa(pausa, cancelar, id_video, omitir)
         if d.get("status") == "started" and etapa and id_video:
             emitir(("estado", id_video, etapa))
 
     registro = []
     reservas = ReservaNombres()
 
-    def bajar(lote):
+    def bajar(lote, id_video):
         """Baja una canción (o la URL entera si no se pudo separar). Cada hilo usa su propio
         YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app."""
+        if id_video in omitir:
+            return  # cancelada antes de empezar: ni siquiera ocupa un cupo
         with limite:
-            esperar_si_pausa(pausa, cancelar)
+            esperar_si_pausa(pausa, cancelar, id_video, omitir)
             opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
                                           organizar)
             with YoutubeDL(opciones) as ydl:
                 agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
                                          plan["extras"], plan["album_defecto"], organizar,
-                                         reservas, pausa)
+                                         reservas, pausa, omitir)
                 ydl.download(lote)
 
-    def bajar_seguro(lote):
+    def bajar_seguro(par):
+        lote, id_video = par
         try:
-            bajar(lote)
+            bajar(lote, id_video)
         except DownloadCancelled:
             pass
         except Exception as e:  # un fallo inesperado no debe tumbar las demás canciones
             log.exception("Fallo inesperado")
             al_fallar("?", str(e))
 
-    if urls:
-        if plan.get("por_cancion") and n_simultaneas > 1 and len(urls) > 1:
+    if lotes:
+        if plan.get("por_cancion") and n_simultaneas > 1 and len(lotes) > 1:
             with ThreadPoolExecutor(max_workers=n_simultaneas) as pool:
-                list(pool.map(bajar_seguro, [[u] for u in urls]))
-        elif plan.get("por_cancion"):
-            for u in urls:
+                list(pool.map(bajar_seguro, lotes))
+        else:
+            for par in lotes:
                 if cancelar.is_set():
                     break
-                bajar_seguro([u])
-        else:
-            bajar_seguro(urls)
+                bajar_seguro(par)
     if cancelar.is_set():
         raise DownloadCancelled("Cancelado por el usuario")
 
