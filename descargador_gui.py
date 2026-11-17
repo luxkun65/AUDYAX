@@ -391,7 +391,7 @@ class App(ctk.CTk):
         cab = ctk.CTkFrame(main, fg_color="transparent")
         cab.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ctk.CTkLabel(cab, text="AUDYAX", font=self.f_tit, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(cab, text="Busca  •  Descarga  •  Disfruta", font=self.f_norm,
+        ctk.CTkLabel(cab, text="Pega el enlace  •  Descarga  •  Disfruta", font=self.f_norm,
                      text_color=C["suave"], anchor="w").pack(anchor="w")
 
         # Tarjeta de controles
@@ -647,18 +647,26 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- acciones
     def _al_cambiar_formato(self):
-        original = self.var_formato.get() == "original"
-        self.cb_calidad.configure(state="disabled" if original else "normal")
+        formato = self.var_formato.get()
+        original = formato == "original"
+        if original:
+            self.var_norm.set(False)
+        # En m4a el audio de YouTube (AAC) se copia tal cual, sin recodificar: la calidad
+        # solo se aplica si se normaliza (entonces sí hay que recodificar).
+        usa_calidad = formato in ("mp3", "opus") or (formato == "m4a" and self.var_norm.get())
+        self.cb_calidad.configure(state="normal" if usa_calidad else "disabled")
         self.chk_norm.configure(state="disabled" if original else "normal")
 
     def _al_marcar_rg(self):
         """ReplayGain y normalizar son excluyentes: marcar una desmarca la otra."""
         if self.var_rg.get():
             self.var_norm.set(False)
+        self._al_cambiar_formato()
 
     def _al_marcar_norm(self):
         if self.var_norm.get():
             self.var_rg.set(False)
+        self._al_cambiar_formato()
 
     def _pegar(self):
         try:
@@ -691,7 +699,7 @@ class App(ctk.CTk):
         if self._encolar(url):
             self.var_url.set("")
 
-    def _encolar(self, url: str) -> bool:
+    def _encolar(self, url: str, subcarpeta: str = "") -> bool:
         cfg = self._cfg_actual()
         if not cfg["carpeta"]:
             messagebox.showwarning("Falta la carpeta", "Elige dónde guardar las canciones.")
@@ -702,6 +710,7 @@ class App(ctk.CTk):
             messagebox.showerror("Carpeta no válida", str(e))
             return False
         guardar_config(cfg)
+        cfg["subcarpeta"] = subcarpeta  # p. ej. la carpeta de la playlist al reintentar
         self.pendientes += 1
         self.trabajos.put((url, cfg))
         if self.hilo is None or not self.hilo.is_alive():
@@ -756,7 +765,7 @@ class App(ctk.CTk):
             self.filas[vid] = {
                 "num": len(self.filas) + 1, "color": "amarillo", "texto": "En cola", "titulo": vid,
                 "artista": "", "album": "", "anio": "", "genero": "", "url": "", "ruta": "",
-                "motivo": "", "replaygain": "", "miniatura": "", "img_pedida": False,
+                "subcarpeta": "", "motivo": "", "replaygain": "", "miniatura": "", "img_pedida": False,
                 "img_s": None, "img_b": None, "datos": None, "datos_pedidos": False,
                 "marca": tk.BooleanVar(value=False)}
             self.filas[vid]["w"] = FilaLista(self, self.lista, vid)
@@ -983,7 +992,8 @@ class App(ctk.CTk):
             messagebox.showinfo("Reintentar", "Solo se pueden reintentar canciones con error que tengan enlace.")
             return
         for vid in validas:
-            self._encolar(self.filas[vid]["url"])
+            # Se reintenta en la misma subcarpeta (la de su playlist, si venía de una)
+            self._encolar(self.filas[vid]["url"], self.filas[vid]["subcarpeta"])
 
     # ---------------------------------------------------------------- cierre
     def _cerrar(self):

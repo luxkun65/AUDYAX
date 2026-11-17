@@ -6,3 +6,75 @@ In addition to downloading, the application facilitates music file organization 
 The application features a graphical user interface that allows users to view queued songs, monitor download progress, identify successfully downloaded files, and detect potential errors. It also includes options for configuring the destination folder and saving user preferences.
 
 The development is primarily based on Python, using `yt-dlp` as the extraction and download engine, `FFmpeg` for audio processing and conversion, and `Mutagen` for metadata management.
+
+## Features
+
+- Download a single song or a whole playlist (each playlist goes into its own subfolder).
+- Output formats: **MP3**, **M4A**, **Opus** or the **original** audio stream.
+- Tags: title, artist, album, year and genre, plus embedded cover art (optionally cropped to a square).
+- **ReplayGain** (track and album) written as tags, without touching the audio, or **loudness normalization** (EBU R128, −14 LUFS), which re-encodes the audio. Only one of the two can be active.
+- Queue with per-song status (queued / downloading / done / error), thumbnails, progress bar and counters.
+- Retry failed songs (they go back to the same playlist subfolder), cancel, open link or folder.
+- Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
+- Light and dark themes; settings are saved in `~/.descargador_musica.json`.
+
+## Requirements
+
+- Python **3.11+**
+- [FFmpeg](https://ffmpeg.org/download.html) installed and available in the `PATH`
+- On Linux, tkinter: `sudo apt install python3-tk`
+
+## Installation
+
+```bash
+git clone https://github.com/luxkun65/AUDYAX.git
+cd AUDYAX
+python -m venv .venv
+# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Usage
+
+```bash
+python descargador_gui.py
+```
+
+Paste a YouTube or YouTube Music link (song or playlist), choose the destination folder, format and options, and press **Descargar**.
+
+> **Note on M4A:** YouTube already serves AAC audio, so M4A is saved as-is, without re-encoding (no quality loss). The quality selector only applies to M4A when normalization is enabled, because then the audio has to be re-encoded.
+
+## Building an executable
+
+```bash
+pip install -r requirements-dev.txt
+python build.py
+```
+
+The executable is created in `dist/` (`AUDYAX.exe` on Windows). Build it on the same operating system you will run it on. FFmpeg is not bundled: it must be installed on the target machine.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The tests don't need internet. The ones that generate audio need FFmpeg and are skipped if it isn't installed. They also run automatically on GitHub Actions for every push and pull request.
+
+## Project structure
+
+| File | Purpose |
+|---|---|
+| `motor_descarga.py` | Download engine: yt-dlp options, post-processing, tags, ReplayGain, settings. No GUI code; it communicates through events, so it can be used from any interface. |
+| `descargador_gui.py` | Graphical interface (customtkinter + Pillow). |
+| `build.py` | Builds the executable with PyInstaller. |
+| `tests/` | Automated tests (pytest). |
+
+## Disclaimer
+
+This tool is intended for personal use. Only download content you have the right to download, and respect YouTube's Terms of Service and the copyright of the artists.
+
+## License
+
+[MIT](LICENSE)

@@ -11,6 +11,7 @@ Requisitos:
 """
 import json
 import logging
+import logging.handlers
 import math
 import re
 import shutil
@@ -20,6 +21,12 @@ from datetime import datetime
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
+from yt_dlp.postprocessor import (
+    EmbedThumbnailPP,
+    FFmpegExtractAudioPP,
+    FFmpegMetadataPP,
+    FFmpegThumbnailsConvertorPP,
+)
 from yt_dlp.postprocessor.common import PostProcessor
 from yt_dlp.utils import sanitize_filename
 
@@ -41,10 +48,7 @@ except ImportError:  # yt-dlp muy antiguo: actualiza con pip install -U yt-dlp
 
 
 CONFIG_PATH = Path.home() / ".descargador_musica.json"
-DIR_POR_DEFECTO = (
-    "B:/Music/Prueba_de_Python" if Path("B:/").exists()
-    else str(Path.home() / "Music" / "Descargas")
-)
+DIR_POR_DEFECTO = str(Path.home() / "Music" / "Descargas")
 CONFIG_POR_DEFECTO = {
     "carpeta": DIR_POR_DEFECTO,
     "formato": "mp3",
@@ -105,6 +109,25 @@ def etiquetas(info: dict) -> dict:
     }
 
 
+def nombre_unico(destino: Path, titulo: str, artista: str) -> str:
+    """Nombre de archivo (sin extensión) que no choque con otro de la carpeta.
+    Primero solo el título; si ya existe, 'Título (Artista)'; si también, 'Título (Artista) 2', 3…
+    Se compara sin distinguir mayúsculas porque Windows tampoco las distingue."""
+    base = sanitize_filename(titulo)
+    try:
+        usados = {f.stem.casefold() for f in destino.iterdir()} if destino.exists() else set()
+    except OSError:
+        usados = set()
+    if base.casefold() not in usados:
+        return base
+    con_artista = f"{base} ({sanitize_filename(artista)})"
+    nombre, n = con_artista, 2
+    while nombre.casefold() in usados:
+        nombre = f"{con_artista} {n}"
+        n += 1
+    return nombre
+
+
 class LimpiarMetadata(PostProcessor):
     """Elige mejores campos que 'uploader', decide el nombre final del archivo
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
@@ -134,10 +157,7 @@ class LimpiarMetadata(PostProcessor):
         if not info.get("album"):
             info["album"] = info.get("playlist_title") or info["title"]
 
-        nombre = sanitize_filename(info["title"])
-        if self.destino.exists() and any(f.stem == nombre for f in self.destino.iterdir()):
-            nombre = f"{nombre} ({sanitize_filename(info['artist'])})"
-        info["nombre_archivo"] = nombre
+        info["nombre_archivo"] = nombre_unico(self.destino, info["title"], info["artist"])
 
         self.emitir(("info", info["id"], etiquetas(info)))
         return [], info
@@ -284,6 +304,34 @@ def quitar_numero_pista(ruta: Path):
             audio.save()
 
 
+class ExtraerAudio(FFmpegExtractAudioPP):
+    """FFmpegExtractAudio que puede obligar a recodificar.
+
+    yt-dlp copia el audio sin tocarlo cuando el códec ya coincide (p. ej. AAC -> m4a,
+    o Opus -> opus). Eso es ideal, salvo cuando se quiere normalizar: copiar y aplicar
+    un filtro a la vez no es posible (con m4a la normalización se ignoraba en silencio
+    y con opus FFmpeg daba error). Con forzar=True se recodifica siempre."""
+
+    def __init__(self, downloader=None, forzar=False, **kw):
+        super().__init__(downloader, **kw)
+        self.forzar = forzar
+
+    @classmethod
+    def pp_key(cls):
+        # Mismo nombre que el original: así siguen valiendo los argumentos
+        # "extractaudio+ffmpeg_o" y los mensajes de progreso.
+        return "ExtractAudio"
+
+    def get_audio_codec(self, path):
+        codec = super().get_audio_codec(path)
+        # Un códec ficticio distinto del de destino hace que yt-dlp convierta
+        return "forzar-recodificacion" if (self.forzar and codec) else codec
+
+
+def debe_normalizar(cfg: dict) -> bool:
+    return bool(cfg.get("normalizar")) and cfg.get("formato") != "original"
+
+
 class MarcarListo(PostProcessor):
     """Se ejecuta al final (after_move): el archivo ya está tageado y en su sitio."""
 
@@ -317,6 +365,14 @@ class MarcarListo(PostProcessor):
         return [], info
 
 
+def subcarpeta_relativa(destino: Path, carpeta: Path) -> str:
+    try:
+        rel = destino.relative_to(carpeta)
+    except ValueError:
+        return ""
+    return "" if str(rel) == "." else str(rel)
+
+
 def _entrada(e: dict) -> dict:
     url = str(e.get("webpage_url") or e.get("url") or "")
     if not url.startswith("http"):
@@ -328,9 +384,10 @@ def _entrada(e: dict) -> dict:
             "url": url, "miniatura": miniatura}
 
 
-def analizar_url(url: str, carpeta: Path):
-    """Devuelve (carpeta_destino, lista_de_canciones, es_playlist). Si es playlist, usa subcarpeta."""
-    destino, entradas, es_playlist = carpeta, [], False
+def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
+    """Devuelve (carpeta_destino, lista_de_canciones, es_playlist). Si es playlist, usa subcarpeta.
+    'subcarpeta' fuerza el destino (se usa al reintentar una canción que venía de una playlist)."""
+    destino, entradas, es_playlist = (carpeta / subcarpeta if subcarpeta else carpeta), [], False
     try:
         opciones = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
                     "ignoreerrors": True, "logger": _Silencio()}
@@ -338,7 +395,7 @@ def analizar_url(url: str, carpeta: Path):
             info = ydl.extract_info(url, download=False)
         if info and info.get("_type") == "playlist":
             es_playlist = True
-            if info.get("title"):
+            if info.get("title") and not subcarpeta:
                 destino = carpeta / sanitize_filename(info["title"])
             for e in info.get("entries") or []:
                 if e and e.get("id") and e.get("_type") != "playlist" and e.get("ie_key") != "YoutubeTab":
@@ -364,7 +421,9 @@ def configurar_log(carpeta: Path) -> logging.Logger:
     for h in list(log.handlers):
         h.close()
         log.removeHandler(h)
-    handler = logging.FileHandler(carpeta / "descarga.log", encoding="utf-8")
+    # Rota a los ~2 MB para que el log no crezca sin límite dentro de la carpeta de música
+    handler = logging.handlers.RotatingFileHandler(
+        carpeta / "descarga.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     log.addHandler(handler)
     return log
@@ -379,10 +438,11 @@ ETAPAS = {
 
 
 def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) -> dict:
+    """Opciones de yt-dlp. Los postprocesadores se añaden aparte (agregar_postprocesadores)
+    porque uno de ellos es una clase propia que no se puede declarar por nombre."""
     # La subcarpeta ya viene resuelta en 'destino'. No se pone "/" dentro de un
     # campo de la plantilla porque yt-dlp lo convierte en "⧹".
     plantilla = str(destino / "%(nombre_archivo)s.%(ext)s")
-    codec = "best" if cfg["formato"] == "original" else cfg["formato"]
 
     ppa = {}
     if cfg["recorte"]:
@@ -390,19 +450,13 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) ->
             "-c:v", "mjpeg",
             "-vf", "crop='if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'",
         ]
-    if cfg["normalizar"] and cfg["formato"] != "original":
+    if debe_normalizar(cfg):
         ppa["extractaudio+ffmpeg_o"] = ["-af", "loudnorm=I=-14:TP=-1:LRA=11"]
 
     return {
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         # "pl_thumbnail" vacío = no guardar la imagen suelta de la playlist
         "outtmpl": {"default": plantilla, "pl_thumbnail": ""},
-        "postprocessors": [
-            {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"},
-            {"key": "FFmpegExtractAudio", "preferredcodec": codec, "preferredquality": cfg["calidad"]},
-            {"key": "FFmpegMetadata", "add_metadata": True},
-            {"key": "EmbedThumbnail"},
-        ],
         "postprocessor_args": ppa,
         "writethumbnail": True,
         "noplaylist": False,
@@ -417,6 +471,19 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) ->
         "progress_hooks": [hook_progreso],
         "postprocessor_hooks": [hook_pp],
     }
+
+
+def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro):
+    """Cadena de postprocesado, en orden: portada -> nombre/tags -> audio -> metadatos -> portada
+    incrustada -> ReplayGain y aviso de 'listo'."""
+    codec = "best" if cfg["formato"] == "original" else cfg["formato"]
+    ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
+    ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar), when="pre_process")
+    ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
+                                        preferredquality=cfg["calidad"]))
+    ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
+    ydl.add_post_processor(EmbedThumbnailPP(ydl))
+    ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro), when="after_move")
 
 
 def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
@@ -438,12 +505,13 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     logger = RegistroYtdlp(log, al_fallar)
 
     # 1) Mostrar de inmediato todas las canciones (amarillas, "en cola")
-    destino, entradas, es_playlist = analizar_url(url, carpeta)
+    destino, entradas, es_playlist = analizar_url(url, carpeta, cfg.get("subcarpeta") or "")
     destino.mkdir(parents=True, exist_ok=True)
     ya_estan = ids_en_archivo(carpeta)
+    sub = subcarpeta_relativa(destino, carpeta)
     for e in entradas:
         emitir(("nuevo", e["id"], {"titulo": e["titulo"], "url": e["url"],
-                                   "miniatura": e["miniatura"]}))
+                                   "miniatura": e["miniatura"], "subcarpeta": sub}))
         if e["id"] in ya_estan:
             emitir(("omitida", e["id"]))
 
@@ -474,8 +542,7 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp)
     registro = []
     with YoutubeDL(opciones) as ydl:
-        ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar), when="pre_process")
-        ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro), when="after_move")
+        agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro)
         ydl.download([url])
 
     # 3) Playlist/álbum: ahora que se conocen todas las pistas, se añade el ReplayGain de álbum
@@ -502,7 +569,9 @@ def cargar_config() -> dict:
 
 
 def guardar_config(cfg: dict):
+    # Solo se guardan las preferencias conocidas (no datos de un trabajo concreto)
+    datos = {k: cfg[k] for k in CONFIG_POR_DEFECTO if k in cfg}
     try:
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        CONFIG_PATH.write_text(json.dumps(datos, indent=2), encoding="utf-8")
     except OSError:
         pass
