@@ -5,7 +5,7 @@ Este archivo solo contiene la ventana. Todo el trabajo de descarga está en
 motor_descarga.py, que debe estar en la misma carpeta.
 
 Requisitos:
-    pip install -U yt-dlp mutagen customtkinter pillow
+    pip install -U yt-dlp mutagen customtkinter pillow tkinterdnd2
     ffmpeg instalado y en el PATH
     (tkinter viene con Python; en Linux: sudo apt install python3-tk)
 
@@ -33,11 +33,30 @@ from PIL import Image, ImageDraw
 from motor_descarga import (
     HAY_MUTAGEN,
     DownloadCancelled,
+    actualizar_ytdlp,
+    buscar,
     cargar_config,
     ejecutar_trabajo,
+    es_enlace_youtube,
+    es_mas_nueva,
+    escribir_etiquetas,
+    extraer_enlaces,
     guardar_config,
     info_archivo,
+    leer_etiquetas,
+    leer_portada,
+    puede_actualizarse,
+    se_puede_editar,
+    ultima_version_ytdlp,
+    version_ytdlp,
 )
+
+# Arrastrar y soltar: opcional (pip install tkinterdnd2). Sin él la app funciona igual.
+try:
+    from tkinterdnd2 import DND_TEXT, TkinterDnD
+    _BASES_DND = (TkinterDnD.DnDWrapper,)
+except ImportError:
+    DND_TEXT, TkinterDnD, _BASES_DND = None, None, ()
 
 # ==============================================================================
 # PALETA (cada color es una tupla: (modo claro, modo oscuro))
@@ -134,6 +153,12 @@ def _dibujar_icono(nombre: str, color: str, tam: int) -> Image.Image:
         linea([(.24, .34), (.30, .9), (.70, .9), (.76, .34)])
         linea([(.42, .45), (.42, .78)])
         linea([(.58, .45), (.58, .78)])
+    elif nombre == "search":
+        d.ellipse(caja(.1, .1, .64, .64), outline=color, width=w)
+        linea([(.58, .58), (.9, .9)], w + 1)
+    elif nombre == "edit":
+        d.polygon([pt(.18, .66), pt(.66, .18), pt(.82, .34), pt(.34, .82)], outline=color, width=w)
+        d.polygon([pt(.12, .88), pt(.18, .66), pt(.34, .82)], fill=color)
     elif nombre == "nota":
         d.ellipse(caja(.08, .62, .42, .92), fill=color)
         d.ellipse(caja(.56, .52, .9, .82), fill=color)
@@ -207,6 +232,19 @@ def imagen_ecualizador() -> ctk.CTkImage:
             y = alto * S - (r + 1) * (cuad + hueco) + hueco
             d.rounded_rectangle((x, y, x + cuad, y + cuad), radius=3 * S, fill=(167, 139, 250, alfa))
     return ctk.CTkImage(light_image=im, dark_image=im, size=(ancho, alto))
+
+
+def portada_jpeg(img: Image.Image, cuadrada: bool, lado_max: int = 1200) -> bytes:
+    """Convierte una imagen cualquiera en la portada JPEG que se incrusta en el archivo."""
+    img = img.convert("RGB")
+    if cuadrada:
+        w, h = img.size
+        m = min(w, h)
+        img = img.crop(((w - m) // 2, (h - m) // 2, (w - m) // 2 + m, (h - m) // 2 + m))
+    img.thumbnail((lado_max, lado_max), Image.LANCZOS)
+    salida = BytesIO()
+    img.save(salida, "JPEG", quality=90)
+    return salida.getvalue()
 
 
 def descargar_bytes(url: str, timeout: int = 10) -> bytes:
@@ -308,14 +346,249 @@ class FilaLista:
 
 
 # ==============================================================================
+# AVISO (franja dentro de la tarjeta de controles: enlace copiado, actualización…)
+# ==============================================================================
+class Aviso:
+    def __init__(self, app, padre, fila: int, ico: str):
+        self.app, self.fila = app, fila
+        self.frame = ctk.CTkFrame(padre, fg_color=C["card2"], corner_radius=10)
+        # Primero los botones: así el texto nunca les quita espacio
+        ctk.CTkButton(self.frame, text="✕", width=28, height=28, fg_color="transparent",
+                      hover_color=C["hover"], text_color=C["suave"],
+                      command=self.ocultar).pack(side="right", padx=(0, 6))
+        self.botones = ctk.CTkFrame(self.frame, fg_color="transparent")
+        self.botones.pack(side="right")
+        self.lbl = ctk.CTkLabel(self.frame, text="", image=icono(ico, 16), compound="left",
+                                font=app.f_norm, anchor="w")
+        self.lbl.pack(side="left", fill="x", expand=True, padx=(10, 8), pady=6)
+        self.visible = False
+
+    def mostrar(self, texto: str, acciones=()):
+        """acciones: lista de (texto, función, es_principal)."""
+        for b in self.botones.winfo_children():
+            b.destroy()
+        self.lbl.configure(text="  " + limpiar_tk(texto))
+        for texto_b, funcion, principal in acciones:
+            def accion(f=funcion):
+                self.ocultar()
+                f()
+            self.app._boton(self.botones, texto_b, accion, acento=principal, height=28).pack(
+                side="left", padx=(0, 6))
+        self.frame.grid(row=self.fila, column=0, columnspan=4, sticky="ew", padx=14, pady=(0, 10))
+        self.visible = True
+
+    def ocultar(self):
+        self.frame.grid_remove()
+        self.visible = False
+
+
+# ==============================================================================
+# RESULTADOS DE BÚSQUEDA
+# ==============================================================================
+class VentanaResultados(ctk.CTkToplevel):
+    """Lista de resultados de 'artista canción' para elegir cuáles descargar."""
+
+    def __init__(self, app, consulta: str, resultados: list):
+        super().__init__(app)
+        self.app = app
+        self.title(f"Resultados: {limpiar_tk(consulta)}")
+        self.geometry("760x580")
+        self.minsize(560, 380)
+        self.transient(app)
+        self.configure(fg_color=C["bg"])
+        self.resultados = resultados
+        self.marcas = {}
+        self.miniaturas = {}
+
+        ctk.CTkLabel(self, text=f"  Resultados para “{corto(consulta, 50)}”", image=icono("search", 18),
+                     compound="left", font=app.f_det, anchor="w").pack(fill="x", padx=16, pady=(14, 2))
+        ctk.CTkLabel(self, text="Marca las canciones que quieres descargar.", font=app.f_norm,
+                     text_color=C["suave"], anchor="w").pack(fill="x", padx=16, pady=(0, 8))
+
+        lista = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
+                                       border_color=C["borde"])
+        lista.pack(fill="both", expand=True, padx=16)
+        for i, r in enumerate(resultados):
+            self._fila(lista, i, r)
+
+        pie = ctk.CTkFrame(self, fg_color="transparent")
+        pie.pack(fill="x", padx=16, pady=12)
+        self.btn_bajar = app._boton(pie, "", self._descargar, icono("download", 18, C["sobre_acento"]),
+                                    acento=True, height=36)
+        self.btn_bajar.pack(side="right")
+        app._boton(pie, "Cancelar", self.destroy, height=36).pack(side="right", padx=8)
+        app._boton(pie, "Abrir en el navegador", self._abrir, icono("external", 16),
+                   height=36).pack(side="left")
+        if resultados:
+            self.marcas[resultados[0]["id"]].set(True)  # el primero suele ser el correcto
+        self._contar()
+        self.after(150, self.focus)
+
+    def _fila(self, padre, i, r):
+        var = tk.BooleanVar(value=False)
+        self.marcas[r["id"]] = var
+        fila = ctk.CTkFrame(padre, fg_color=C["fila_a"] if i % 2 == 0 else C["fila_b"], corner_radius=8)
+        fila.pack(fill="x", pady=1)
+        ctk.CTkCheckBox(fila, text="", variable=var, width=24, checkbox_width=18, checkbox_height=18,
+                        corner_radius=5, border_width=2, fg_color=C["acento"],
+                        hover_color=C["acento_hover"], border_color=C["suave"],
+                        checkmark_color=C["sobre_acento"], command=self._contar).pack(
+            side="left", padx=(10, 6), pady=6)
+        thumb = ctk.CTkLabel(fila, text="", image=self.app.img_vacia, width=40, height=40)
+        thumb.pack(side="left", padx=6, pady=6)
+        self.miniaturas[r["id"]] = thumb
+        textos = ctk.CTkFrame(fila, fg_color="transparent")
+        textos.pack(side="left", fill="x", expand=True, padx=6)
+        ctk.CTkLabel(textos, text=corto(r["titulo"], 70), font=self.app.f_neg, anchor="w").pack(anchor="w")
+        sub = " • ".join(p for p in (r.get("canal"), r.get("duracion")) if p)
+        ctk.CTkLabel(textos, text=limpiar_tk(sub) or "—", font=self.app.f_peq, text_color=C["suave"],
+                     anchor="w").pack(anchor="w")
+
+        def alternar(_e=None, v=var):
+            v.set(not v.get())
+            self._contar()
+        for w in (fila, thumb, textos, *textos.winfo_children()):
+            w.bind("<Button-1>", alternar, add=True)
+        if r.get("miniatura"):
+            self.app.pool.submit(self.app._bajar_imagen_resultado, r["id"], r["miniatura"])
+
+    def poner_imagen(self, vid, datos):
+        lbl = self.miniaturas.get(vid)
+        if lbl is None:
+            return
+        try:
+            img = Image.open(BytesIO(datos))
+            img.load()
+            lbl.configure(image=imagen_cuadrada(img, 40, 8))
+        except Exception:
+            pass
+
+    def _elegidos(self):
+        return [r for r in self.resultados if self.marcas[r["id"]].get()]
+
+    def _contar(self):
+        n = len(self._elegidos())
+        self.btn_bajar.configure(text=f"Descargar ({n})" if n else "Descargar",
+                                 state="normal" if n else "disabled")
+
+    def _abrir(self):
+        for r in self._elegidos()[:5] or self.resultados[:1]:
+            webbrowser.open(r["url"])
+
+    def _descargar(self):
+        for r in self._elegidos():
+            self.app._encolar(r["url"])
+        self.app.var_url.set("")
+        self.destroy()
+
+
+# ==============================================================================
+# EDITOR DE ETIQUETAS
+# ==============================================================================
+class VentanaEtiquetas(ctk.CTkToplevel):
+    """Corrige título, artista, álbum, año, género y portada de un archivo ya descargado."""
+
+    CAMPOS = [("titulo", "Título"), ("artista", "Artista"), ("album", "Álbum"),
+              ("anio", "Año"), ("genero", "Género")]
+
+    def __init__(self, app, vid: str, ruta: str):
+        super().__init__(app)
+        self.app, self.vid, self.ruta = app, vid, ruta
+        self.title("Editar etiquetas")
+        self.geometry("640x400")
+        self.resizable(False, False)
+        self.transient(app)
+        self.configure(fg_color=C["bg"])
+        self.portada_nueva = None
+        actuales = leer_etiquetas(ruta)
+
+        ctk.CTkLabel(self, text="  Editar etiquetas", image=icono("edit", 18), compound="left",
+                     font=app.f_det, anchor="w").pack(fill="x", padx=18, pady=(14, 0))
+        ctk.CTkLabel(self, text=corto(Path(ruta).name, 80), font=app.f_peq, text_color=C["suave"],
+                     anchor="w").pack(fill="x", padx=18, pady=(0, 10))
+
+        cuerpo = self.app._tarjeta(self)
+        cuerpo.pack(fill="both", expand=True, padx=18)
+        izq = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        izq.pack(side="left", padx=16, pady=16, anchor="n")
+        self.l_portada = ctk.CTkLabel(izq, text="", image=app.img_vacia_portada, width=160, height=160)
+        self.l_portada.pack()
+        datos = leer_portada(ruta)
+        if datos:
+            self._mostrar_portada(datos)
+        app._boton(izq, "Cambiar portada…", self._elegir_portada, icono("folder", 16),
+                   height=32).pack(pady=(10, 0), fill="x")
+
+        der = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        der.pack(side="left", fill="both", expand=True, padx=(0, 16), pady=16)
+        der.grid_columnconfigure(1, weight=1)
+        self.vars = {}
+        for i, (clave, titulo) in enumerate(self.CAMPOS):
+            ctk.CTkLabel(der, text=titulo, font=app.f_neg, anchor="w").grid(
+                row=i, column=0, sticky="w", padx=(0, 12), pady=5)
+            var = tk.StringVar(value=limpiar_tk(actuales.get(clave, "")))
+            self.vars[clave] = var
+            ctk.CTkEntry(der, textvariable=var, height=34, corner_radius=10, font=app.f_norm,
+                         fg_color=C["input"], border_color=C["borde"], text_color=C["texto"]).grid(
+                row=i, column=1, sticky="ew", pady=5)
+
+        pie = ctk.CTkFrame(self, fg_color="transparent")
+        pie.pack(fill="x", padx=18, pady=12)
+        app._boton(pie, "Guardar", self._guardar, acento=True, width=120, height=36).pack(side="right")
+        app._boton(pie, "Cancelar", self.destroy, width=100, height=36).pack(side="right", padx=8)
+        self.bind("<Return>", lambda e: self._guardar())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.after(150, self.focus)
+
+    def _mostrar_portada(self, datos: bytes):
+        try:
+            img = Image.open(BytesIO(datos))
+            img.load()
+            self.l_portada.configure(image=imagen_cuadrada(img, 160, 14))
+        except Exception:
+            pass
+
+    def _elegir_portada(self):
+        archivo = filedialog.askopenfilename(
+            parent=self, title="Elige la imagen de portada",
+            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.webp *.bmp"), ("Todos", "*.*")])
+        if not archivo:
+            return
+        try:
+            with Image.open(archivo) as img:
+                self.portada_nueva = portada_jpeg(img, cuadrada=bool(self.app.var_recorte.get()))
+        except Exception as e:
+            messagebox.showerror("Imagen no válida", str(e), parent=self)
+            return
+        self._mostrar_portada(self.portada_nueva)
+
+    def _guardar(self):
+        datos = {k: v.get().strip() for k, v in self.vars.items()}
+        try:
+            escribir_etiquetas(self.ruta, datos, self.portada_nueva)
+        except Exception as e:
+            messagebox.showerror("No se pudieron guardar las etiquetas", str(e), parent=self)
+            return
+        self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva)
+        self.destroy()
+
+
+# ==============================================================================
 # VENTANA PRINCIPAL
 # ==============================================================================
-class App(ctk.CTk):
+class App(ctk.CTk, *_BASES_DND):
     def __init__(self):
         self.cfg = cargar_config()
         self.tema = "light" if self.cfg.get("tema") == "light" else "dark"
         ctk.set_appearance_mode(self.tema)
         super().__init__()
+        self.hay_dnd = False
+        if TkinterDnD is not None:
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                self.hay_dnd = True
+            except Exception:  # tkdnd no disponible en este sistema: sin arrastrar/soltar
+                pass
         self.title("AUDYAX")
         self.geometry("1180x800")
         self.minsize(1050, 640)
@@ -337,6 +610,11 @@ class App(ctk.CTk):
         self.errores_generales = 0
         self.filas = {}   # id -> datos de la canción
         self.sel = None   # id de la canción mostrada en el detalle
+        self.ventana_resultados = None
+        self.buscando = False
+        self.actualizando = False
+        self._ultimo_ofrecido = ""     # último enlace del portapapeles que ya se ofreció
+        self._pp_programado = False
 
         self.ico_estado = {"verde": icono("ok", 20, "#2ecc71"), "amarillo": icono("reloj", 20, "#f1c40f"),
                            "rojo": icono("err", 20, "#e74c3c")}
@@ -344,11 +622,16 @@ class App(ctk.CTk):
         self.ico_externo = icono("external", 16, C["suave"])
         self.img_vacia = imagen_vacia(40)
         self.img_vacia_grande = imagen_vacia(88)
+        self.img_vacia_portada = imagen_vacia(160)
 
         self._construir()
         self.protocol("WM_DELETE_WINDOW", self._cerrar)
         self.after(100, self._procesar_eventos)
         self.after(400, self._revisar_ffmpeg)
+        self.after(800, self._revisar_portapapeles)
+        self.bind("<FocusIn>", self._al_enfocar, add=True)
+        if self.cfg.get("revisar_ytdlp", True):
+            self.after(2500, lambda: self._revisar_ytdlp(manual=False))
 
     # ---------------------------------------------------------------- construcción
     def _boton(self, padre, texto, comando, icono_=None, acento=False, **kw):
@@ -402,15 +685,21 @@ class App(ctk.CTk):
         ctk.CTkLabel(ctrl, text=" Enlace:", image=icono("link", 16), compound="left",
                      font=self.f_neg).grid(row=0, column=0, sticky="w", padx=(14, 8), pady=(12, 6))
         entrada = ctk.CTkEntry(ctrl, textvariable=self.var_url, height=38, corner_radius=10,
-                               placeholder_text="Pega aquí el enlace de YouTube…", font=self.f_norm,
+                               placeholder_text="Pega un enlace de YouTube o escribe artista y canción…", font=self.f_norm,
                                fg_color=C["input"], border_color=C["borde"], text_color=C["texto"])
         entrada.grid(row=0, column=1, sticky="ew", pady=(12, 6))
         entrada.bind("<Return>", lambda e: self._descargar())
         entrada.focus_set()
+        self.entrada = entrada
         self._boton(ctrl, "Pegar", self._pegar, width=90, height=38).grid(
             row=0, column=2, padx=(10, 4), pady=(12, 6))
-        self._boton(ctrl, "Descargar", self._descargar, icono("download", 18, C["sobre_acento"]),
-                    acento=True, width=130, height=38).grid(row=0, column=3, padx=(4, 14), pady=(12, 6))
+        self.ico_descargar = icono("download", 18, C["sobre_acento"])
+        self.ico_buscar = icono("search", 18, C["sobre_acento"])
+        self.btn_descargar = self._boton(ctrl, "Descargar", self._descargar, self.ico_descargar,
+                                         acento=True, width=130, height=38)
+        self.btn_descargar.grid(row=0, column=3, padx=(4, 14), pady=(12, 6))
+        # El botón dice "Buscar" cuando lo escrito no es un enlace
+        self.var_url.trace_add("write", lambda *a: self._actualizar_boton_principal())
 
         fila2 = ctk.CTkFrame(ctrl, fg_color="transparent")
         fila2.grid(row=1, column=0, columnspan=4, sticky="ew", padx=14, pady=4)
@@ -458,6 +747,10 @@ class App(ctk.CTk):
         self.chk_norm = casilla("Normalizar volumen (modifica el audio)", self.var_norm, self._al_marcar_norm)
         casilla("Portada cuadrada", self.var_recorte)
         self._al_cambiar_formato()
+
+        # Avisos (ocultos hasta que hagan falta)
+        self.aviso_pp = Aviso(self, ctrl, 3, "link")
+        self.aviso_yt = Aviso(self, ctrl, 4, "refresh")
 
         # Lista
         marco_l = self._tarjeta(main)
@@ -508,6 +801,7 @@ class App(ctk.CTk):
         self.l_chip = ctk.CTkLabel(info, text="", font=self.f_peq, fg_color=C["card2"],
                                    text_color=C["suave"], corner_radius=12, height=24)
         self.l_chip.pack(anchor="w", pady=4)
+        self.l_chip.pack_forget()  # solo se muestra cuando hay año o género
         self.l_det_info = ctk.CTkLabel(info, text="", font=self.f_peq, text_color=C["suave"],
                                        anchor="w", justify="left")
         self.l_det_info.pack(anchor="w")
@@ -533,6 +827,7 @@ class App(ctk.CTk):
         for texto, ico, cmd in [("Copiar enlace", "copy", self._copiar_enlace),
                                 ("Abrir enlace", "external", lambda: self._abrir_enlace()),
                                 ("Abrir carpeta", "folder", self._abrir_carpeta_cancion),
+                                ("Editar etiquetas", "edit", self._editar_etiquetas),
                                 ("Reintentar", "refresh", self._reintentar)]:
             self._boton(self.det_botones, texto, cmd, icono(ico, 16), height=34).pack(side="left", padx=(0, 8))
         self._boton(self.det_botones, "Limpiar lista", self._limpiar_lista, icono("trash", 16),
@@ -554,6 +849,14 @@ class App(ctk.CTk):
         self.progreso.set(0)
         self.progreso.pack(side="right", padx=10)
 
+        # Arrastrar y soltar enlaces sobre la ventana, el cuadro de texto o la lista
+        if self.hay_dnd:
+            for w in (self, self.entrada._entry, self.lista._parent_canvas):
+                try:
+                    w.drop_target_register(DND_TEXT)
+                    w.dnd_bind("<<Drop>>", self._al_soltar)
+                except Exception:
+                    pass
     def _construir_lateral(self):
         lat = ctk.CTkFrame(self, width=112, corner_radius=0, fg_color=C["lateral"])
         lat.grid(row=0, column=0, sticky="ns")
@@ -609,7 +912,7 @@ class App(ctk.CTk):
     def _configuracion(self):
         top = ctk.CTkToplevel(self)
         top.title("Configuración")
-        top.geometry("360x210")
+        top.geometry("420x420")
         top.resizable(False, False)
         top.transient(self)
         top.configure(fg_color=C["bg"])
@@ -628,6 +931,31 @@ class App(ctk.CTk):
             side="left", padx=(0, 8))
         self._boton(fila, "Faltantes", lambda: self._abrir_archivo_carpeta("faltantes.txt"), height=32).pack(
             side="left")
+
+        ctk.CTkLabel(top, text="Portapapeles", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
+        var_pp = tk.BooleanVar(value=self.cfg.get("detectar_portapapeles", True))
+
+        def cambiar_pp():
+            self.cfg["detectar_portapapeles"] = bool(var_pp.get())
+            guardar_config(self._cfg_actual())
+        ctk.CTkSwitch(top, text="Ofrecer pegar los enlaces de YouTube copiados", variable=var_pp,
+                      command=cambiar_pp, font=self.f_norm, progress_color=C["acento"]).pack(
+            anchor="w", padx=20)
+
+        ctk.CTkLabel(top, text="yt-dlp (motor de descarga)", font=self.f_neg).pack(
+            anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(top, text=f"Versión instalada: {version_ytdlp()}", font=self.f_peq,
+                     text_color=C["suave"]).pack(anchor="w", padx=20, pady=(0, 6))
+        var_yt = tk.BooleanVar(value=self.cfg.get("revisar_ytdlp", True))
+
+        def cambiar_yt():
+            self.cfg["revisar_ytdlp"] = bool(var_yt.get())
+            guardar_config(self._cfg_actual())
+        ctk.CTkSwitch(top, text="Avisar al abrir si hay una versión nueva", variable=var_yt,
+                      command=cambiar_yt, font=self.f_norm, progress_color=C["acento"]).pack(
+            anchor="w", padx=20)
+        self._boton(top, "Buscar actualización", lambda: self._revisar_ytdlp(manual=True),
+                    icono("refresh", 16), height=32).pack(anchor="w", padx=20, pady=(10, 0))
         self.after(150, top.focus)
 
     def _abrir_archivo_carpeta(self, nombre):
@@ -689,15 +1017,158 @@ class App(ctk.CTk):
             "recorte": bool(self.var_recorte.get()),
             "replaygain": bool(self.var_rg.get()) and HAY_MUTAGEN,
             "tema": self.tema,
+            "revisar_ytdlp": bool(self.cfg.get("revisar_ytdlp", True)),
+            "detectar_portapapeles": bool(self.cfg.get("detectar_portapapeles", True)),
         }
 
     def _descargar(self):
-        url = self.var_url.get().strip()
-        if not url.startswith(("http://", "https://")):
-            messagebox.showwarning("Enlace no válido", "Pega un enlace de YouTube o YouTube Music.")
+        """Botón principal: descarga si es un enlace; si es texto, busca por nombre."""
+        texto = self.var_url.get().strip()
+        if not texto:
+            messagebox.showinfo("AUDYAX", "Pega un enlace de YouTube o escribe artista y canción.")
             return
-        if self._encolar(url):
+        if not texto.startswith(("http://", "https://")):
+            self._buscar(texto)
+            return
+        if self._encolar(texto):
             self.var_url.set("")
+
+    def _actualizar_boton_principal(self):
+        texto = self.var_url.get().strip()
+        if self.buscando:
+            return
+        if texto and not texto.startswith(("http://", "https://")):
+            self.btn_descargar.configure(text="Buscar", image=self.ico_buscar)
+        else:
+            self.btn_descargar.configure(text="Descargar", image=self.ico_descargar)
+
+    # ---------------------------------------------------------------- búsqueda
+    def _buscar(self, texto: str):
+        if self.buscando:
+            return
+        self.buscando = True
+        self.btn_descargar.configure(text="Buscando…", state="disabled")
+
+        def trabajo():
+            try:
+                self.eventos.put(("busqueda", texto, buscar(texto, 15)))
+            except Exception as e:
+                self.eventos.put(("busqueda_error", texto, str(e)))
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _fin_busqueda(self):
+        self.buscando = False
+        self.btn_descargar.configure(state="normal")
+        self._actualizar_boton_principal()
+
+    def _mostrar_resultados(self, texto, resultados):
+        self._fin_busqueda()
+        if not resultados:
+            messagebox.showinfo("Sin resultados", f"No encontré nada para “{texto}”.")
+            return
+        if self.ventana_resultados is not None and self.ventana_resultados.winfo_exists():
+            self.ventana_resultados.destroy()
+        self.ventana_resultados = VentanaResultados(self, texto, resultados)
+
+    def _bajar_imagen_resultado(self, vid, url):
+        try:
+            self.eventos.put(("img_resultado", vid, descargar_bytes(url)))
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- portapapeles / soltar
+    def _al_enfocar(self, _evento=None):
+        # FocusIn llega una vez por cada widget; se agrupa en una sola revisión
+        if not self._pp_programado:
+            self._pp_programado = True
+            self.after(200, self._revisar_portapapeles)
+
+    def _revisar_portapapeles(self):
+        self._pp_programado = False
+        if not self.cfg.get("detectar_portapapeles", True):
+            return
+        try:
+            texto = self.clipboard_get().strip()
+        except tk.TclError:
+            return
+        ya_en_lista = any(f["url"] == texto for f in self.filas.values())
+        if (not es_enlace_youtube(texto) or texto == self._ultimo_ofrecido
+                or texto == self.var_url.get().strip() or ya_en_lista):
+            return
+        self._ultimo_ofrecido = texto
+        self.aviso_pp.mostrar(f"Enlace copiado:  {corto(texto, 60)}", [
+            ("Pegar", lambda: self.var_url.set(texto), False),
+            ("Descargar", lambda: self._encolar(texto), True)])
+
+    def _al_soltar(self, evento):
+        enlaces = extraer_enlaces(getattr(evento, "data", "") or "")
+        if not enlaces:
+            messagebox.showinfo("Arrastrar y soltar", "No encontré enlaces de YouTube en lo que soltaste.")
+        for url in enlaces:
+            self._encolar(url)
+        return getattr(evento, "action", None)
+
+    # ---------------------------------------------------------------- yt-dlp
+    def _revisar_ytdlp(self, manual: bool):
+        def trabajo():
+            actual = version_ytdlp()
+            try:
+                ultima = ultima_version_ytdlp()
+            except Exception as e:
+                if manual:
+                    self.eventos.put(("ytdlp_sin_conexion", str(e)))
+                return
+            if es_mas_nueva(ultima, actual):
+                self.eventos.put(("ytdlp_nueva", actual, ultima))
+            elif manual:
+                self.eventos.put(("ytdlp_al_dia", actual))
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _ofrecer_actualizacion(self, actual, ultima):
+        if puede_actualizarse():
+            self.aviso_yt.mostrar(
+                f"Hay una versión nueva de yt-dlp ({ultima}; tienes {actual}).",
+                [("Más tarde", lambda: None, False), ("Actualizar", self._actualizar_ytdlp, True)])
+        else:
+            self.aviso_yt.mostrar(
+                f"Hay una versión nueva de yt-dlp ({ultima}). Descarga la última versión de AUDYAX.",
+                [("Ver versiones", lambda: webbrowser.open(REPO_URL + "/releases"), True)])
+
+    def _actualizar_ytdlp(self):
+        if self.pendientes > 0:
+            messagebox.showwarning("Actualizar yt-dlp", "Espera a que terminen las descargas en curso.")
+            self.aviso_yt.mostrar("yt-dlp: actualización pendiente.",
+                                  [("Actualizar", self._actualizar_ytdlp, True)])
+            return
+        if self.actualizando:
+            return
+        self.actualizando = True
+        self.aviso_yt.mostrar("Actualizando yt-dlp… (puede tardar un minuto)")
+
+        def trabajo():
+            ok, mensaje = actualizar_ytdlp()
+            self.eventos.put(("ytdlp_actualizado", ok, mensaje))
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _fin_actualizacion(self, ok, mensaje):
+        self.actualizando = False
+        if not ok:
+            self.aviso_yt.ocultar()
+            messagebox.showerror("No se pudo actualizar yt-dlp", mensaje)
+            return
+        self.aviso_yt.mostrar("yt-dlp se actualizó. Reinicia AUDYAX para usar la versión nueva.",
+                              [("Reiniciar ahora", self._reiniciar, True)])
+
+    def _reiniciar(self):
+        if self.pendientes > 0 and not messagebox.askyesno(
+                "Reiniciar", "Hay descargas en curso que se cancelarán. ¿Reiniciar igualmente?"):
+            return
+        try:
+            subprocess.Popen([sys.executable, *sys.argv])
+        except OSError as e:
+            messagebox.showerror("No se pudo reiniciar", f"{e}\n\nCierra y abre AUDYAX a mano.")
+            return
+        self._cerrar()
 
     def _encolar(self, url: str, subcarpeta: str = "") -> bool:
         cfg = self._cfg_actual()
@@ -855,6 +1326,23 @@ class App(ctk.CTk):
         elif tipo == "fin":
             self.pendientes = max(0, self.pendientes - 1)
             self._actualizar_botones()
+        elif tipo == "busqueda":
+            self._mostrar_resultados(ev[1], ev[2])
+        elif tipo == "busqueda_error":
+            self._fin_busqueda()
+            messagebox.showerror("No se pudo buscar", corto(ev[2], 300))
+        elif tipo == "img_resultado":
+            v = self.ventana_resultados
+            if v is not None and v.winfo_exists():
+                v.poner_imagen(ev[1], ev[2])
+        elif tipo == "ytdlp_nueva":
+            self._ofrecer_actualizacion(ev[1], ev[2])
+        elif tipo == "ytdlp_al_dia":
+            messagebox.showinfo("yt-dlp", f"Ya tienes la última versión ({ev[1]}).")
+        elif tipo == "ytdlp_sin_conexion":
+            messagebox.showwarning("yt-dlp", "No se pudo consultar la última versión:\n" + corto(ev[1], 200))
+        elif tipo == "ytdlp_actualizado":
+            self._fin_actualizacion(ev[1], ev[2])
 
     def _poner_imagen(self, vid, datos):
         f = self.filas.get(vid)
@@ -984,6 +1472,30 @@ class App(ctk.CTk):
             abrir_ruta(carpeta)
         else:
             messagebox.showinfo("Carpeta", "Esa carpeta todavía no existe.")
+
+    def _editar_etiquetas(self):
+        f = self.filas.get(self.sel)
+        ruta = f["ruta"] if f else ""
+        if not f or f["color"] != "verde" or not ruta or not Path(ruta).exists():
+            messagebox.showinfo("Editar etiquetas", "Selecciona una canción ya descargada en esta sesión.")
+            return
+        if not se_puede_editar(ruta):
+            messagebox.showinfo("Editar etiquetas",
+                                "Solo se pueden editar archivos MP3, M4A y Opus (hace falta mutagen).")
+            return
+        try:
+            VentanaEtiquetas(self, self.sel, ruta)
+        except Exception as e:
+            messagebox.showerror("No se pudo leer el archivo", str(e))
+
+    def _etiquetas_guardadas(self, vid, datos, portada):
+        f = self.filas.get(vid)
+        if not f:
+            return
+        f.update(datos=None, datos_pedidos=False)  # el tamaño del archivo cambia
+        self._fila(vid, **datos)
+        if portada:
+            self._poner_imagen(vid, portada)
 
     def _reintentar(self):
         candidatas = self._marcadas() or ([self.sel] if self.sel in self.filas else [])

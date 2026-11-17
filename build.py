@@ -17,6 +17,7 @@ PyInstaller.__main__.run([
     "--windowed",                       # sin ventana de consola
     "--collect-data", "customtkinter",  # temas y fuentes de customtkinter
     "--hidden-import", "PIL._tkinter_finder",  # Pillow + tkinter (si falta, no abre)
+    "--collect-all", "tkinterdnd2",     # librería nativa de arrastrar y soltar
     "--noconfirm",
     "--clean",
 ])

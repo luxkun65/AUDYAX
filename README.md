@@ -10,11 +10,15 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 ## Features
 
 - Download a single song or a whole playlist (each playlist goes into its own subfolder).
+- **Search by name**: type "artist song" instead of a link, pick the results you want and download them.
+- **Clipboard detection**: when the app opens or regains focus, a copied YouTube link is offered with *Paste* / *Download*. Links can also be **dragged and dropped** onto the window (requires `tkinterdnd2`, included in `requirements.txt`).
 - Output formats: **MP3**, **M4A**, **Opus** or the **original** audio stream.
 - Tags: title, artist, album, year and genre, plus embedded cover art (optionally cropped to a square).
 - **ReplayGain** (track and album) written as tags, without touching the audio, or **loudness normalization** (EBU R128, −14 LUFS), which re-encodes the audio. Only one of the two can be active.
 - Queue with per-song status (queued / downloading / done / error), thumbnails, progress bar and counters.
 - Retry failed songs (they go back to the same playlist subfolder), cancel, open link or folder.
+- **Tag editor**: fix the title, artist, album, year, genre or cover of a downloaded MP3, M4A or Opus file from the detail panel.
+- **yt-dlp updates**: YouTube changes often and old yt-dlp versions stop working. AUDYAX checks for a new version on startup (can be turned off in *Configuración*) and updates it with one click; restart the app afterwards.
 - Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
 - Light and dark themes; settings are saved in `~/.descargador_musica.json`.
 
@@ -41,6 +45,8 @@ python descargador_gui.py
 ```
 
 Paste a YouTube or YouTube Music link (song or playlist), choose the destination folder, format and options, and press **Descargar**.
+
+> **Note on updates:** updating yt-dlp from the app uses `pip`, so it works when running from source (ideally inside a virtual environment). The packaged executable includes its own copy of yt-dlp; to update it, download a newer AUDYAX release.
 
 > **Note on M4A:** YouTube already serves AAC audio, so M4A is saved as-is, without re-encoding (no quality loss). The quality selector only applies to M4A when normalization is enabled, because then the audio has to be re-encoded.
 
