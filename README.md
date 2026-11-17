@@ -10,6 +10,7 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 ## Features
 
 - Download a single song or a whole playlist (each playlist goes into its own subfolder).
+- **YouTube Music playlists and albums** are read the way YouTube Music shows them (with `ytmusicapi`): when the original version of a song was removed or is blocked in your country, YouTube Music silently plays another version; AUDYAX downloads that same playable version and uses YouTube Music's title, artist and album. Radio links (`&list=RD…`) download only that song, not the whole automatic radio.
 - **Search by name**: type "artist song" instead of a link, pick the results you want and download them.
 - **Clipboard detection**: when the app opens or regains focus, a copied YouTube link is offered with *Paste* / *Download*. Links can also be **dragged and dropped** onto the window (requires `tkinterdnd2`, included in `requirements.txt`).
 - Output formats: **MP3**, **M4A**, **Opus** or the **original** audio stream.

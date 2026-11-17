@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,13 @@ try:
     HAY_MUTAGEN = True
 except ImportError:
     HAY_MUTAGEN = False
+
+# Lee las playlists como las muestra YouTube Music (ver pistas_ytmusic). Opcional.
+try:
+    from ytmusicapi import YTMusic
+    HAY_YTMUSIC = True
+except ImportError:
+    HAY_YTMUSIC = False
 
 try:
     from yt_dlp.utils import DownloadCancelled
@@ -137,15 +145,27 @@ class LimpiarMetadata(PostProcessor):
     """Elige mejores campos que 'uploader', decide el nombre final del archivo
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
 
-    def __init__(self, downloader, destino: Path, emitir, cancelar):
+    def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto=""):
         super().__init__(downloader)
         self.destino = destino
         self.emitir = emitir
         self.cancelar = cancelar
+        # id -> {"titulo", "artista", "album"} tal como los muestra YouTube Music. Mandan sobre
+        # lo que deduce yt-dlp (que con un videoclip pondría "Canción (Official Video)" o "ArtistaVEVO").
+        self.extras = extras or {}
+        self.album_defecto = album_defecto
 
     def run(self, info):
         if self.cancelar.is_set():
             raise DownloadCancelled("Cancelado por el usuario")
+
+        extra = self.extras.get(info.get("id")) or {}
+        if extra.get("titulo"):
+            info["track"] = extra["titulo"]
+        if extra.get("artista"):
+            info["artist"] = extra["artista"]
+        if extra.get("album"):
+            info["album"] = extra["album"]
 
         artista = (
             info.get("artist")
@@ -160,7 +180,7 @@ class LimpiarMetadata(PostProcessor):
         # No escribir número de pista: yt-dlp omite las etiquetas que valen None
         info["track_number"] = None
         if not info.get("album"):
-            info["album"] = info.get("playlist_title") or info["title"]
+            info["album"] = info.get("playlist_title") or self.album_defecto or info["title"]
 
         info["nombre_archivo"] = nombre_unico(self.destino, info["title"], info["artist"])
 
@@ -389,6 +409,87 @@ def _entrada(e: dict) -> dict:
             "url": url, "miniatura": miniatura}
 
 
+def limpiar_url(url: str) -> str:
+    """Arregla dos trampas de los enlaces de YouTube Music:
+    - 'watch?v=X&list=RD…' es la "radio" automática de esa canción: yt-dlp bajaría la radio
+      entera (decenas de canciones que no son tuyas). Se deja solo la canción.
+    - 'music.youtube.com/watch?v=X' se pasa a www.youtube.com (es el mismo video).
+    Las playlists de music.youtube.com se dejan igual: las resuelve pistas_ytmusic."""
+    url = (url or "").strip()
+    partes = urllib.parse.urlsplit(url)
+    if "youtube.com" not in partes.netloc or partes.path != "/watch":
+        return url
+    qs = urllib.parse.parse_qs(partes.query)
+    v = (qs.get("v") or [""])[0]
+    lista = (qs.get("list") or [""])[0]
+    if not v:
+        return url
+    if lista and not lista.startswith("RD"):
+        if partes.netloc.startswith("music."):
+            return url  # canción dentro de una playlist de YouTube Music: se baja la playlist
+        return f"https://www.youtube.com/watch?v={v}&list={lista}"
+    return f"https://www.youtube.com/watch?v={v}"
+
+
+def es_playlist_ytmusic(url: str) -> bool:
+    partes = urllib.parse.urlsplit(url or "")
+    if not partes.netloc.startswith("music.youtube.com"):
+        return False
+    if partes.path.startswith("/browse/MPRE"):
+        return True  # página de un álbum
+    lista = (urllib.parse.parse_qs(partes.query).get("list") or [""])[0]
+    return bool(lista) and not lista.startswith("RD")
+
+
+def _miniatura_mayor(miniaturas) -> str:
+    miniaturas = [t for t in (miniaturas or []) if t and t.get("url")]
+    if not miniaturas:
+        return ""
+    return max(miniaturas, key=lambda t: (t.get("width") or 0))["url"]
+
+
+def pistas_ytmusic(url: str, cliente=None):
+    """Lee una playlist o álbum de music.youtube.com como lo hace YouTube Music.
+
+    Por qué: yt-dlp no soporta YouTube Music y redirige a la misma playlist en youtube.com,
+    que guarda el ID ORIGINAL de cada canción. Si esa versión fue retirada o está bloqueada,
+    yt-dlp falla con "Video unavailable", mientras YouTube Music reproduce en silencio otra
+    versión disponible (otro ID). Aquí se usa el ID que YouTube Music realmente reproduce.
+
+    Devuelve (titulo, pistas) o None si no se puede (sin ytmusicapi, sin conexión, etc.).
+    Cada pista: id, titulo, artista, album, url, miniatura, disponible."""
+    if cliente is None:
+        if not HAY_YTMUSIC:
+            return None
+        cliente = YTMusic()
+    partes = urllib.parse.urlsplit(url)
+    album_fijo = ""
+    if partes.path.startswith("/browse/MPRE"):
+        datos = cliente.get_album(partes.path.rsplit("/", 1)[-1])
+        album_fijo = datos.get("title") or ""
+    else:
+        lista = (urllib.parse.parse_qs(partes.query).get("list") or [""])[0]
+        datos = cliente.get_playlist(lista, limit=None)
+    titulo = datos.get("title") or ""
+    pistas = []
+    for t in datos.get("tracks") or []:
+        vid = t.get("videoId")
+        if not vid:
+            continue
+        album = t.get("album")
+        album = (album.get("name") if isinstance(album, dict) else album) or album_fijo
+        pistas.append({
+            "id": vid,
+            "titulo": t.get("title") or vid,
+            "artista": ", ".join(a.get("name", "") for a in t.get("artists") or [] if a.get("name")),
+            "album": album or "",
+            "url": f"https://music.youtube.com/watch?v={vid}",
+            "miniatura": _miniatura_mayor(t.get("thumbnails")) or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+            "disponible": t.get("isAvailable", True) is not False,
+        })
+    return titulo, pistas
+
+
 def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
     """Devuelve (carpeta_destino, lista_de_canciones, es_playlist). Si es playlist, usa subcarpeta.
     'subcarpeta' fuerza el destino (se usa al reintentar una canción que venía de una playlist)."""
@@ -478,12 +579,14 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp) ->
     }
 
 
-def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro):
+def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
+                             extras=None, album_defecto=""):
     """Cadena de postprocesado, en orden: portada -> nombre/tags -> audio -> metadatos -> portada
     incrustada -> ReplayGain y aviso de 'listo'."""
     codec = "best" if cfg["formato"] == "original" else cfg["formato"]
     ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
-    ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar), when="pre_process")
+    ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto),
+                           when="pre_process")
     ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
                                         preferredquality=cfg["calidad"]))
     ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
@@ -491,34 +594,78 @@ def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro):
     ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro), when="after_move")
 
 
+def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None) -> dict:
+    """Decide qué se va a bajar. Devuelve destino, entradas, es_playlist, las URLs que se
+    le pasan a yt-dlp y, si vino de YouTube Music, sus títulos/artistas/álbumes por id."""
+    url = limpiar_url(url)
+    if es_playlist_ytmusic(url):
+        try:
+            res = pistas_ytmusic(url)
+        except Exception as e:  # sin conexión, playlist privada, cambio de la API…
+            res = None
+            if log:
+                log.warning(f"No se pudo leer la playlist con YouTube Music ({e}); se usa yt-dlp")
+        if res and res[1]:
+            titulo, pistas = res
+            if subcarpeta:
+                destino = carpeta / subcarpeta
+            else:
+                destino = carpeta / sanitize_filename(titulo) if titulo else carpeta
+            return {
+                "destino": destino, "entradas": pistas, "es_playlist": True,
+                "urls": [f"https://www.youtube.com/watch?v={p['id']}" for p in pistas],
+                "extras": {p["id"]: {k: p[k] for k in ("titulo", "artista", "album")} for p in pistas},
+                "album_defecto": titulo,
+            }
+    destino, entradas, es_playlist = analizar_url(url, carpeta, subcarpeta)
+    return {"destino": destino, "entradas": entradas, "es_playlist": es_playlist,
+            "urls": [url], "extras": {}, "album_defecto": ""}
+
+
 def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     """Descarga una URL (video o playlist) y va enviando eventos a la interfaz."""
     carpeta = Path(cfg["carpeta"])
     carpeta.mkdir(parents=True, exist_ok=True)
     log = configurar_log(carpeta)
+    conocidas = {}  # id -> entrada (para que faltantes.txt diga QUÉ canción falló)
 
     def al_fallar(id_video, motivo):
+        e = conocidas.get(id_video) or {}
+        if e.get("disponible") is False:
+            motivo += (" (YouTube Music la muestra en gris: no está disponible en tu país "
+                       "o fue retirada)")
         emitir(("error", id_video, motivo))
         try:
-            enlace = (f"https://www.youtube.com/watch?v={id_video}"
-                      if id_video != "?" else "(desconocido)")
+            enlace = e.get("url") or (f"https://www.youtube.com/watch?v={id_video}"
+                                      if id_video != "?" else "(desconocido)")
+            cancion = " - ".join(x for x in (e.get("artista"), e.get("titulo")) if x)
             with open(carpeta / "faltantes.txt", "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now():%Y-%m-%d %H:%M}\nURL: {enlace}\nMotivo: {motivo}\n---\n")
+                f.write(f"{datetime.now():%Y-%m-%d %H:%M}\n"
+                        + (f"Canción: {cancion}\n" if cancion else "")
+                        + f"URL: {enlace}\nMotivo: {motivo}\n---\n")
         except OSError:
             pass
 
     logger = RegistroYtdlp(log, al_fallar)
 
     # 1) Mostrar de inmediato todas las canciones (amarillas, "en cola")
-    destino, entradas, es_playlist = analizar_url(url, carpeta, cfg.get("subcarpeta") or "")
+    plan = resolver(url, carpeta, cfg.get("subcarpeta") or "", log)
+    destino, entradas, es_playlist = plan["destino"], plan["entradas"], plan["es_playlist"]
     destino.mkdir(parents=True, exist_ok=True)
     ya_estan = ids_en_archivo(carpeta)
     sub = subcarpeta_relativa(destino, carpeta)
     for e in entradas:
-        emitir(("nuevo", e["id"], {"titulo": e["titulo"], "url": e["url"],
-                                   "miniatura": e["miniatura"], "subcarpeta": sub}))
+        conocidas[e["id"]] = e
+        datos = {"titulo": e["titulo"], "url": e["url"], "miniatura": e["miniatura"], "subcarpeta": sub}
+        for clave in ("artista", "album"):
+            if e.get(clave):
+                datos[clave] = e[clave]
+        emitir(("nuevo", e["id"], datos))
         if e["id"] in ya_estan:
             emitir(("omitida", e["id"]))
+    urls = plan["urls"]
+    if plan["extras"]:  # lista de canciones sueltas: no pedir las que ya están
+        urls = [u for u, e in zip(urls, entradas) if e["id"] not in ya_estan]
 
     # 2) Hooks de progreso (con límite para no saturar la interfaz)
     ultimo = {}
@@ -547,8 +694,10 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar):
     opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp)
     registro = []
     with YoutubeDL(opciones) as ydl:
-        agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro)
-        ydl.download([url])
+        agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
+                                 plan["extras"], plan["album_defecto"])
+        if urls:
+            ydl.download(urls)
 
     # 3) Playlist/álbum: ahora que se conocen todas las pistas, se añade el ReplayGain de álbum
     if cfg["replaygain"] and es_playlist and len(registro) >= 2:
@@ -653,14 +802,16 @@ def puede_actualizarse() -> bool:
 
 
 def actualizar_ytdlp() -> tuple:
-    """Actualiza yt-dlp con pip. Devuelve (ok, mensaje). Hay que reiniciar la app
+    """Actualiza yt-dlp (y ytmusicapi, que también se rompe cuando YouTube Music cambia)
+    con pip. Devuelve (ok, mensaje). Hay que reiniciar la app
     para que se use la versión nueva (la vieja ya está cargada en memoria)."""
     if not puede_actualizarse():
         return False, ("Esta es la versión empaquetada (.exe): yt-dlp va dentro del programa. "
                        "Descarga una versión nueva de AUDYAX para actualizarlo.")
     extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform.startswith("win") else {}
     try:
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+        paquetes = ["yt-dlp"] + (["ytmusicapi"] if HAY_YTMUSIC else [])
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", *paquetes],
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=600, **extra)
     except (OSError, subprocess.TimeoutExpired) as e:
