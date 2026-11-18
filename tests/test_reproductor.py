@@ -1,5 +1,6 @@
 """Motor del mini reproductor (con una salida de audio simulada: los servidores de pruebas
 no tienen tarjeta de sonido)."""
+import sys
 import threading
 import time
 
@@ -141,3 +142,21 @@ def test_formato_tiempo():
 def test_audio_disponible_devuelve_motivo():
     ok, motivo = r.audio_disponible()
     assert isinstance(ok, bool) and (ok or motivo)
+
+
+def test_audio_disponible_si_portaudio_no_arranca(monkeypatch):
+    """En Linux sin servidor de sonido, importar sounddevice lanza PortAudioError (no OSError)."""
+    import builtins
+    original = builtins.__import__
+
+    class PortAudioError(Exception):
+        pass
+
+    def importar(nombre, *a, **k):
+        if nombre == "sounddevice":
+            raise PortAudioError("Error initializing PortAudio")
+        return original(nombre, *a, **k)
+    monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+    monkeypatch.setattr(builtins, "__import__", importar)
+    ok, motivo = r.audio_disponible()
+    assert not ok and "no se pudo iniciar el audio" in motivo

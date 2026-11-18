@@ -44,6 +44,8 @@ def audio_disponible() -> tuple:
         return False, "falta la librería sounddevice (pip install sounddevice)"
     except OSError as e:  # Linux sin PortAudio
         return False, f"falta PortAudio ({e}). En Linux: sudo apt install libportaudio2"
+    except Exception as e:  # PortAudioError: PortAudio no arranca (p. ej. sin servidor de sonido)
+        return False, f"no se pudo iniciar el audio ({e})"
     try:
         if sd.default.device[1] is None or sd.default.device[1] < 0:
             sd.query_devices(kind="output")
