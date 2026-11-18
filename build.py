@@ -83,7 +83,7 @@ def copy_ffmpeg(source: Path, dest: Path) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Genera el ejecutable de AUDYAX")
+    parser = argparse.ArgumentParser(description="Builds the AUDYAX executable")
     parser.add_argument("--ffmpeg", type=Path, default=ROOT / "vendor" / "ffmpeg")
     parser.add_argument("--zip", action="store_true")
     options = parser.parse_args()
