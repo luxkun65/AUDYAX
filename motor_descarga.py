@@ -1159,7 +1159,9 @@ def renombrar_archivo(ruta, nuevo_nombre: str) -> Path:
     if not nombre:
         raise ValueError("El nombre del archivo no puede quedar vacío.")
     destino = ruta.with_name(nombre + ruta.suffix)
-    if destino == ruta:
+    # Se compara el texto exacto: en Windows "cancion.mp3" == "Cancion.mp3" como rutas, y
+    # entonces un cambio solo de mayúsculas no se haría.
+    if destino.name == ruta.name:
         return ruta
     if destino.exists() and not os.path.samefile(destino, ruta):
         raise FileExistsError(f"Ya existe «{destino.name}» en esa carpeta.")
