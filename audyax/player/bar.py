@@ -70,15 +70,17 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
       fonts: dict with "bold", "normal", "small" (CTkFont);
       neighbor(item, step) -> the next (step=1) or previous (step=-1) item in the list, or None;
       on_volume_change(v) -> to remember the volume;
-      on_close() -> the window hides the bar.
+      on_close() -> the window hides the bar;
+      on_track_change(item) -> optional, called each time another song starts (e.g. to highlight it).
     An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
-                 volume=0.8, engine=None):
+                 volume=0.8, engine=None, on_track_change=None):
         super().__init__(master, fg_color=colors["card"], corner_radius=14, border_width=1,
                          border_color=colors.get("border", colors["card"]))
         self.colors, self.fonts = colors, fonts
         self.neighbor, self.on_volume_change, self.on_close = neighbor, on_volume_change, on_close
+        self.on_track_change = on_track_change
         self._end_pending = threading.Event()
         self.engine = engine or AudioEngine(on_finish=self._end_pending.set)
         self.engine.volume = volume
@@ -164,6 +166,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         except Exception:
             pass
         self.btn_play.configure(image=self.ico_pause)
+        if self.on_track_change:
+            self.on_track_change(item)
 
     def toggle(self):
         if not self.item:

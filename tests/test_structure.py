@@ -14,7 +14,7 @@ def test_core_and_downloader_do_not_import_the_ui():
             "import audyax.core.config, audyax.core.tags, audyax.core.replaygain, audyax.core.lyrics\n"
             "import audyax.core.metadata, audyax.core.system, audyax.downloader.engine\n"
             "import audyax.downloader.youtube, audyax.downloader.updates, audyax.downloader.export\n"
-            "import audyax.downloader.watched, audyax.player.engine\n"
+            "import audyax.downloader.watched, audyax.player.engine, audyax.core.library\n"
             "ui = [m for m in sys.modules if m.split('.')[0] in ('tkinter', 'customtkinter', 'audyax.gui')]\n"
             "ui += [m for m in sys.modules if m.startswith('audyax.gui')]\n"
             "print(ui)")

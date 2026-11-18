@@ -118,6 +118,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.export_window = None
         self.watched_window = None
         self.player = None          # mini player bar (created on first use)
+        self.player_window = None   # player window (part 2), opened from the sidebar logo
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
         self.cfg["watched"] = self.watched
         self.checking = set()           # urls of watched playlists being checked
@@ -398,7 +399,9 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         sidebar.grid(row=0, column=0, sticky="ns")
         sidebar.grid_propagate(False)
         sidebar.pack_propagate(False)
-        ctk.CTkLabel(sidebar, text="", image=logo(56)).pack(pady=(16, 14))
+        self.l_logo = ctk.CTkLabel(sidebar, text="", image=logo(56), cursor="hand2")
+        self.l_logo.pack(pady=(16, 14))
+        self.l_logo.bind("<Double-Button-1>", self._on_logo_double_click)   # opens the player
 
         def item(text, ico, active=False, command=None):
             ctk.CTkButton(sidebar, text=text, image=icon(ico, 26, C["text"] if active else C["muted"]),
@@ -453,6 +456,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _apply_theme(self, mode: str):
         self.theme = mode
         ctk.set_appearance_mode(mode)
+        if self.player_window is not None and self.player_window.winfo_exists():
+            self.player_window.apply_theme()
         if mode == "dark":
             self.sw_theme.select()
         else:
@@ -510,7 +515,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
             **{k: self.cfg.get(k, DEFAULT_CONFIG[k]) for k in (
                 "notifications", "keep_in_background", "speed_limit_enabled", "speed_limit_mb",
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
-                "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new")},
+                "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
+                "library_folder")},
             "watched": self.watched,
         }
 
@@ -1082,6 +1088,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _close(self):
         if self.player is not None:
             self.player.engine.stop()
+        if self.player_window is not None and self.player_window.winfo_exists():
+            self.player_window.close()
         save_config(self._current_cfg())
         self._cancel()
         self.tray.hide()

@@ -40,6 +40,7 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - **Lyrics** (*Configuración → Letras y álbum*, off by default): after each song, AUDYAX looks up its lyrics in [LRCLIB](https://lrclib.net) (time-synced when available) and saves them as a `.lrc` file next to the song, inside the file's tags (MP3 `USLT`, M4A `©lyr`, Opus `LYRICS`), or both.
 - **Better album, year and cover**: when YouTube doesn't give the album or the year (the "—" in the list), AUDYAX looks the song up in [MusicBrainz](https://musicbrainz.org) and fills them in, and uses the album cover from the [Cover Art Archive](https://coverartarchive.org) instead of the video thumbnail. It is conservative: if the match is not clear (title, artist and duration), nothing is changed. On by default; each part can be turned off. If a service is down, it is skipped for 5 minutes so downloads don't slow down.
 - **Mini player**: double-click a downloaded song (or right-click → *Reproducir*) to listen without leaving the app: play/pause, previous/next (following the list as it's filtered and sorted), seek bar, volume (remembered), and the synced lyrics line by line if the song has them. Needs `sounddevice` and `numpy` (in `requirements.txt`; on Linux also `sudo apt install libportaudio2`).
+- **Player window** (part 2, in progress): **double-click the AUDYAX logo** in the sidebar; after a short animation the player opens in its own window with your **library**: every song in your music folder (the download folder by default; *Carpeta…* chooses another one, remembered) shown as **Canciones**, **Artistas** or **Álbumes**, with a search box (ignores accents and upper/lower case; `Ctrl+F`, `Esc` clears it) and sortable columns. Double-click or `Enter` plays; previous/next follow the table as it's shown. The first scan reads every file; later ones (*Actualizar*, or each time the window opens) only read new or changed files, using a cache in `~/.audyax_library.json`. Only one song plays at a time: starting one in the player stops the mini player and vice versa.
 - **Watched playlists** (*Vigiladas* in the sidebar): save a playlist or album and AUDYAX checks whether it has new songs (on startup, or with *Revisar*) and downloads only those, to the same folder, using `descargados.txt`. After downloading a playlist, AUDYAX offers to watch it. Optionally, new songs can be downloaded automatically (*Configuración → Descargas*).
 - Light and dark themes; settings are saved in `~/.audyax.json` (older versions used `~/.descargador_musica.json`; it is migrated automatically on first start) (tabs *General*, *Descargas*, *Letras y álbum*, *Avanzado*).
 
@@ -118,6 +119,7 @@ audyax/
     tags.py                  read/write tags and covers (mutagen), rename files, file info
     replaygain.py            loudness analysis and ReplayGain tags
     lyrics.py                lyrics from LRCLIB, .lrc files, embedded lyrics, LRC parsing
+    library.py               player library: folder scan with cache, artists, albums, search, sort
     metadata.py              MusicBrainz (album, year) and Cover Art Archive covers
     services.py              circuit breaker for the online services
     system.py                program folder and bundled FFmpeg
@@ -138,7 +140,8 @@ audyax/
     settings.py              settings window
     dialogs.py               search results, export and tag editor windows
     watched_window.py        watched playlists window
-    player_panel.py          connects the list with the mini player
+    player_panel.py          connects the list with the mini player; opens the player window
+    player_window.py         player window (library + player bar) and the logo intro animation
     desktop.py               system tray icon and notifications (optional)
     style.py, widgets.py     colors, icons, image helpers, small widgets
 build.py                     builds the program with PyInstaller (with FFmpeg and the icon)
