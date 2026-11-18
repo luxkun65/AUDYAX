@@ -14,9 +14,9 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-
-from services import CircuitBreaker, ServiceUnavailable
 from pathlib import Path
+
+from audyax.core.services import CircuitBreaker, ServiceUnavailable
 
 URL_API = "https://lrclib.net/api"
 USER_AGENT = "AUDYAX (https://github.com/luxkun65/AUDYAX)"

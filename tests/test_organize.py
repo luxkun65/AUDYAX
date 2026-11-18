@@ -5,9 +5,10 @@ import threading
 from pathlib import Path
 
 import pytest
-
-import engine as m
 from test_engine import make_audio, needs_ffmpeg
+
+from audyax.core import config
+from audyax.downloader import engine
 
 
 class _NeverCancelled:
@@ -17,17 +18,17 @@ class _NeverCancelled:
 
 # ------------------------------------------------------------------ template and mode
 def test_does_not_organize_by_default():
-    assert m.DEFAULT_CONFIG["organize"] == "flat"
-    assert m.DEFAULT_CONFIG["playlists_in_folder"] is True
+    assert config.DEFAULT_CONFIG["organize"] == "flat"
+    assert config.DEFAULT_CONFIG["playlists_in_folder"] is True
 
 
 def test_output_template(tmp_path):
-    assert m.output_template(tmp_path) == str(tmp_path / "%(safe_filename)s.%(ext)s")
-    assert m.output_template(tmp_path, "artist") == str(
+    assert engine.output_template(tmp_path) == str(tmp_path / "%(safe_filename)s.%(ext)s")
+    assert engine.output_template(tmp_path, "artist") == str(
         tmp_path / "%(org_artist)s" / "%(safe_filename)s.%(ext)s")
-    assert m.output_template(tmp_path, "artist_album") == str(
+    assert engine.output_template(tmp_path, "artist_album") == str(
         tmp_path / "%(org_artist)s" / "%(org_album)s" / "%(safe_filename)s.%(ext)s")
-    assert m.output_template(tmp_path, "inventado") == m.output_template(tmp_path)
+    assert engine.output_template(tmp_path, "inventado") == engine.output_template(tmp_path)
 
 
 @pytest.mark.parametrize("cfg, is_playlist, expected", [
@@ -40,14 +41,14 @@ def test_output_template(tmp_path):
     ({}, False, "flat"),
 ])
 def test_organize_mode(cfg, is_playlist, expected):
-    assert m.organize_mode(cfg, is_playlist) == expected
+    assert engine.organize_mode(cfg, is_playlist) == expected
 
 
 def test_yt_dlp_builds_path_and_escapes_slashes(tmp_path):
     from yt_dlp import YoutubeDL
     info = {"id": "x", "ext": "mp3", "title": "T", "org_artist": "AC/DC",
             "org_album": "Back in Black", "safe_filename": "Hells Bells"}
-    with YoutubeDL({"outtmpl": {"default": m.output_template(tmp_path, "artist_album")},
+    with YoutubeDL({"outtmpl": {"default": engine.output_template(tmp_path, "artist_album")},
                     "quiet": True}) as ydl:
         path = Path(ydl.prepare_filename(info))
     assert path.parent.parent.parent == tmp_path  # exactly two folders, not three
@@ -58,7 +59,7 @@ def test_clean_metadata_checks_clashes_in_organized_folder(tmp_path):
     (tmp_path / "Intro.mp3").touch()                       # another loose "Intro" in the root
     (tmp_path / "Artista B" / "Disco").mkdir(parents=True)
     (tmp_path / "Artista B" / "Disco" / "Intro.mp3").touch()
-    pp = m.CleanMetadata(None, tmp_path, lambda e: None, _NeverCancelled(), organize="artist_album")
+    pp = engine.CleanMetadata(None, tmp_path, lambda e: None, _NeverCancelled(), organize="artist_album")
 
     _, info = pp.run({"id": "1", "title": "Intro", "artist": "Artista A", "album": "Disco"})
     assert (info["org_artist"], info["org_album"], info["safe_filename"]) == ("Artista A", "Disco", "Intro")
@@ -90,10 +91,10 @@ def _on_download(monkeypatch, url, folder, is_playlist, **cfg_extra):
                 "entries": [dict(data, id="cancion", url=url, thumbnail="")],
                 "is_playlist": is_playlist, "urls": [url], "extras": {"cancion": data},
                 "default_album": "Mi Playlist" if is_playlist else ""}
-    monkeypatch.setattr(m, "resolve", fake_plan)
+    monkeypatch.setattr(engine, "resolve", fake_plan)
     events = []
-    cfg = dict(m.DEFAULT_CONFIG, folder=str(folder), audio_format="mp3", replaygain=False, **cfg_extra)
-    m.run_job(url, cfg, events.append, threading.Event())
+    cfg = dict(config.DEFAULT_CONFIG, folder=str(folder), audio_format="mp3", replaygain=False, **cfg_extra)
+    engine.run_job(url, cfg, events.append, threading.Event())
     done_songs = [e[2]["path"] for e in events if e[0] == "done"]
     assert len(done_songs) == 1, events
     return Path(done_songs[0]).relative_to(folder)

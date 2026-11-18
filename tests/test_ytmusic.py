@@ -2,7 +2,7 @@
 
 import pytest
 
-import engine as m
+from audyax.downloader import engine, youtube
 
 
 # ------------------------------------------------------------------ clean_url
@@ -25,7 +25,7 @@ import engine as m
     ("https://example.com/watch?v=abc", "https://example.com/watch?v=abc"),
 ])
 def test_clean_url(entry, expected):
-    assert m.clean_url(entry) == expected
+    assert youtube.clean_url(entry) == expected
 
 
 @pytest.mark.parametrize("url, expected", [
@@ -38,7 +38,7 @@ def test_clean_url(entry, expected):
     ("https://www.youtube.com/playlist?list=PL123", False),
 ])
 def test_is_ytmusic_playlist(url, expected):
-    assert m.is_ytmusic_playlist(url) is expected
+    assert youtube.is_ytmusic_playlist(url) is expected
 
 
 # ------------------------------------------------------------------ ytmusic_tracks
@@ -71,7 +71,7 @@ class FakeClient:
 
 def test_ytmusic_tracks_use_version_youtube_music_plays():
     client = FakeClient()
-    title, tracks = m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL123&si=x", client)
+    title, tracks = youtube.ytmusic_tracks("https://music.youtube.com/playlist?list=PL123&si=x", client)
     assert client.requests_made == [("playlist", "PL123", None)]  # None = all songs
     assert title == "Mi Playlist"
     assert [p["id"] for p in tracks] == ["bDybRgaVD2Y", "gris0000001"]
@@ -84,21 +84,21 @@ def test_ytmusic_tracks_use_version_youtube_music_plays():
 
 
 def test_ytmusic_tracks_album():
-    title, tracks = m.ytmusic_tracks("https://music.youtube.com/browse/MPREb_abc", FakeClient())
+    title, tracks = youtube.ytmusic_tracks("https://music.youtube.com/browse/MPREb_abc", FakeClient())
     assert title == "Álbum Z"
     assert [(p["id"], p["album"]) for p in tracks] == [("t1", "Álbum Z"), ("t2", "Álbum Z")]
 
 
 def test_ytmusic_tracks_without_library(monkeypatch):
-    monkeypatch.setattr(m, "HAS_YTMUSIC", False)
-    assert m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1") is None
+    monkeypatch.setattr(youtube, "HAS_YTMUSIC", False)
+    assert youtube.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1") is None
 
 
 # ------------------------------------------------------------------ resolve
 def test_resolve_ytmusic_playlist(tmp_path, monkeypatch):
-    real = m.ytmusic_tracks
-    monkeypatch.setattr(m, "ytmusic_tracks", lambda url, **kw: real(url, FakeClient()))
-    plan = m.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path)
+    real = youtube.ytmusic_tracks
+    monkeypatch.setattr(engine, "ytmusic_tracks", lambda url, **kw: real(url, FakeClient()))
+    plan = engine.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path)
     assert plan["dest"] == tmp_path / "Mi Playlist"
     assert plan["is_playlist"]
     assert plan["urls"] == ["https://www.youtube.com/watch?v=bDybRgaVD2Y",
@@ -108,32 +108,32 @@ def test_resolve_ytmusic_playlist(tmp_path, monkeypatch):
     assert plan["default_album"] == "Mi Playlist"
 
     # When retrying inside the playlist, the given subfolder is respected
-    assert m.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path,
+    assert engine.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path,
                       "Otra")["dest"] == tmp_path / "Otra"
 
 
 def test_resolve_falls_back_to_ytdlp(tmp_path, monkeypatch):
     def fails(url, **kw):
         raise ConnectionError("sin internet")
-    monkeypatch.setattr(m, "ytmusic_tracks", fails)
-    monkeypatch.setattr(m, "analyze_url", lambda url, folder, sub, *a: (folder, [], True, ""))
-    plan = m.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path)
+    monkeypatch.setattr(engine, "ytmusic_tracks", fails)
+    monkeypatch.setattr(engine, "analyze_url", lambda url, folder, sub, *a: (folder, [], True, ""))
+    plan = engine.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path)
     assert plan["urls"] == ["https://music.youtube.com/playlist?list=PL123"]
     assert plan["extras"] == {}
 
 
 def test_resolve_drops_radio(tmp_path, monkeypatch):
     views = []
-    monkeypatch.setattr(m, "analyze_url",
+    monkeypatch.setattr(engine, "analyze_url",
                         lambda url, folder, sub, *a: views.append(url) or (folder, [], False, ""))
-    plan = m.resolve("https://music.youtube.com/watch?v=abc&list=RDAMVMabc", tmp_path)
+    plan = engine.resolve("https://music.youtube.com/watch?v=abc&list=RDAMVMabc", tmp_path)
     assert views == plan["urls"] == ["https://www.youtube.com/watch?v=abc"]
 
 
 # ------------------------------------------------------------------ CleanMetadata
 def test_clean_metadata_uses_youtube_music_data(tmp_path):
     events = []
-    pp = m.CleanMetadata(None, tmp_path, events.append, _NeverCancelled(),
+    pp = engine.CleanMetadata(None, tmp_path, events.append, _NeverCancelled(),
                            extras={"v1": {"title": "Canción", "artist": "Artista A", "album": ""}},
                            default_album="Mi Playlist")
     _, info = pp.run({"id": "v1", "title": "Artista A - Canción (Official Video)",
@@ -145,7 +145,7 @@ def test_clean_metadata_uses_youtube_music_data(tmp_path):
 
 
 def test_clean_metadata_without_extras_unchanged(tmp_path):
-    pp = m.CleanMetadata(None, tmp_path, lambda e: None, _NeverCancelled())
+    pp = engine.CleanMetadata(None, tmp_path, lambda e: None, _NeverCancelled())
     _, info = pp.run({"id": "v1", "title": "T", "uploader": "Canal - Topic"})
     assert (info["artist"], info["album"]) == ("Canal", "T")
 

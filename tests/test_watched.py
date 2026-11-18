@@ -4,8 +4,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import engine as m
-import watched as v
+from audyax.core import config
+from audyax.downloader import engine
+from audyax.downloader import watched as v
 
 
 @pytest.mark.parametrize("url, expected", [
@@ -48,13 +49,13 @@ def _plan(entries, is_playlist=True, title="Mi Lista"):
         "urls": [e["url"] for e in entries], "extras": {}, "default_album": title, "per_song": True}
 
 
-def _to_entry(i):
+def _entry(i):
     return {"id": f"id{i}", "title": f"T{i}", "url": f"https://www.youtube.com/watch?v=id{i}", "thumbnail": ""}
 
 
 def test_check_finds_new_songs(tmp_path, monkeypatch):
     (tmp_path / "descargados.txt").write_text("youtube id1\nyoutube id3\n", encoding="utf-8")
-    monkeypatch.setattr(m, "resolve", _plan([_to_entry(i) for i in range(1, 5)]))
+    monkeypatch.setattr(engine, "resolve", _plan([_entry(i) for i in range(1, 5)]))
     watch = v.create("https://www.youtube.com/playlist?list=PL1", tmp_path)
     new_songs = v.check(watch)
     assert [e["id"] for e in new_songs] == ["id2", "id4"]
@@ -65,11 +66,11 @@ def test_check_finds_new_songs(tmp_path, monkeypatch):
 def test_check_with_error(tmp_path, monkeypatch):
     def fails(*a, **k):
         raise ConnectionError("sin internet")
-    monkeypatch.setattr(m, "resolve", fails)
+    monkeypatch.setattr(engine, "resolve", fails)
     watch = v.create("https://www.youtube.com/playlist?list=PL1", tmp_path)
     assert v.check(watch) == [] and "sin internet" in watch["error"]
     assert v.check_summary(watch).startswith("No se pudo revisar")
-    monkeypatch.setattr(m, "resolve", _plan([], is_playlist=True))
+    monkeypatch.setattr(engine, "resolve", _plan([], is_playlist=True))
     assert v.check(watch) == [] and "privada" in watch["error"]
 
 
@@ -85,7 +86,7 @@ def test_time_ago():
 
 def test_only_new_skips_existing_songs(tmp_path, monkeypatch):
     (tmp_path / "descargados.txt").write_text("youtube id1\n", encoding="utf-8")
-    monkeypatch.setattr(m, "resolve", _plan([_to_entry(1), _to_entry(2)]))
+    monkeypatch.setattr(engine, "resolve", _plan([_entry(1), _entry(2)]))
     requested = []
 
     class Fake:
@@ -103,10 +104,10 @@ def test_only_new_skips_existing_songs(tmp_path, monkeypatch):
 
         def download(self, urls):
             requested.extend(urls)
-    monkeypatch.setattr(m, "YoutubeDL", Fake)
+    monkeypatch.setattr(engine, "YoutubeDL", Fake)
     events = []
-    cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), only_new=True)
-    m.run_job("https://www.youtube.com/playlist?list=PL1", cfg, events.append, threading.Event())
+    cfg = dict(config.DEFAULT_CONFIG, folder=str(tmp_path), only_new=True)
+    engine.run_job("https://www.youtube.com/playlist?list=PL1", cfg, events.append, threading.Event())
     assert [e[1] for e in events if e[0] == "new"] == ["id2"]
     assert not [e for e in events if e[0] == "skipped"]
     assert requested == ["https://www.youtube.com/watch?v=id2"]

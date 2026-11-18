@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def no_third_party_internet(monkeypatch):
     """Tests don't query the real MusicBrainz or LRCLIB (it would be slow and flaky):
     by default they find nothing. The tests for those modules simulate their responses."""
-    import lyrics
-    import metadata
+    from audyax.core import lyrics, metadata
     monkeypatch.setattr(metadata, "search", lambda *a, **k: None)
     monkeypatch.setattr(lyrics, "find_lyrics", lambda *a, **k: None)

@@ -7,31 +7,33 @@ import threading
 from pathlib import Path
 
 import pytest
-
-import desktop
-import engine as m
 from test_engine import needs_ffmpeg
+
+import audyax
+from audyax.core import config, system
+from audyax.downloader import engine, network, updates, youtube
+from audyax.gui import desktop
 
 
 # ------------------------------------------------------------------ advanced options
 def test_advanced_options_off_by_default():
-    cfg = m.DEFAULT_CONFIG
+    cfg = config.DEFAULT_CONFIG
     assert not cfg["speed_limit_enabled"] and not cfg["proxy_enabled"] and not cfg["cookies_enabled"]
-    assert m.network_options(cfg) == {}
+    assert network.network_options(cfg) == {}
     assert cfg["notifications"] and cfg["keep_in_background"]
 
 
 def test_speed_limit_is_split():
-    cfg = dict(m.DEFAULT_CONFIG, speed_limit_enabled=True, speed_limit_mb=3,
+    cfg = dict(config.DEFAULT_CONFIG, speed_limit_enabled=True, speed_limit_mb=3,
                parallel_downloads=3)
-    assert m.network_options(cfg)["ratelimit"] == 1024 * 1024  # 3 MB/s among 3 downloads
+    assert network.network_options(cfg)["ratelimit"] == 1024 * 1024  # 3 MB/s among 3 downloads
     cfg["speed_limit_mb"] = "1,5"  # decimal comma, as written in Spanish
     cfg["parallel_downloads"] = 1
-    assert m.network_options(cfg)["ratelimit"] == int(1.5 * 1024 * 1024)
+    assert network.network_options(cfg)["ratelimit"] == int(1.5 * 1024 * 1024)
     cfg["speed_limit_mb"] = "abc"
-    assert "ratelimit" not in m.network_options(cfg)
+    assert "ratelimit" not in network.network_options(cfg)
     cfg["speed_limit_mb"] = 0.001  # never less than 32 KB/s
-    assert m.network_options(cfg)["ratelimit"] == 32 * 1024
+    assert network.network_options(cfg)["ratelimit"] == 32 * 1024
 
 
 @pytest.mark.parametrize("proxy, is_valid", [
@@ -41,28 +43,28 @@ def test_speed_limit_is_split():
     ("http://a b:80", False),
 ])
 def test_proxy(proxy, is_valid):
-    cfg = dict(m.DEFAULT_CONFIG, proxy_enabled=True, proxy=proxy)
-    assert (m.network_options(cfg).get("proxy") == proxy) is is_valid
+    cfg = dict(config.DEFAULT_CONFIG, proxy_enabled=True, proxy=proxy)
+    assert (network.network_options(cfg).get("proxy") == proxy) is is_valid
     cfg["proxy_enabled"] = False
-    assert "proxy" not in m.network_options(cfg)
+    assert "proxy" not in network.network_options(cfg)
 
 
 def test_cookies(tmp_path):
-    cfg = dict(m.DEFAULT_CONFIG, cookies_enabled=True)
-    assert m.network_options(cfg) == {}  # cookies never go in the general options
-    assert m.cookie_options(cfg) == {"cookiesfrombrowser": ("firefox",)}
+    cfg = dict(config.DEFAULT_CONFIG, cookies_enabled=True)
+    assert network.network_options(cfg) == {}  # cookies never go in the general options
+    assert network.cookie_options(cfg) == {"cookiesfrombrowser": ("firefox",)}
     cfg["cookies_source"] = "edge"
-    assert m.cookie_options(cfg) == {"cookiesfrombrowser": ("edge",)}
+    assert network.cookie_options(cfg) == {"cookiesfrombrowser": ("edge",)}
     cfg["cookies_source"] = "inventado"
-    assert m.cookie_options(cfg) == {}
+    assert network.cookie_options(cfg) == {}
     cfg["cookies_source"] = "file"
-    assert m.cookie_options(cfg) == {}  # no file chosen
+    assert network.cookie_options(cfg) == {}  # no file chosen
     file = tmp_path / "cookies.txt"
     file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
     cfg["cookies_file"] = str(file)
-    assert m.cookie_options(cfg) == {"cookiefile": str(file)}
+    assert network.cookie_options(cfg) == {"cookiefile": str(file)}
     cfg["cookies_enabled"] = False
-    assert m.cookie_options(cfg) == {}
+    assert network.cookie_options(cfg) == {}
 
 
 @pytest.mark.parametrize("reason, is_age", [
@@ -73,7 +75,7 @@ def test_cookies(tmp_path):
     ("Private video. Sign in if you've been granted access", False),
 ])
 def test_age_restriction_detection(reason, is_age):
-    assert bool(m.AGE_RESTRICTION_RE.search(reason)) is is_age
+    assert bool(network.AGE_RESTRICTION_RE.search(reason)) is is_age
 
 
 ID_AGE, ID_NORMAL, ID_OTHER = "edadEdad123", "normalNorm1", "otroOtro123"
@@ -107,10 +109,10 @@ def _fake_youtube(monkeypatch, tmp_path, second_attempt_fails=False):
                               "be inappropriate for some users.")
                 elif vid == ID_OTHER:
                     log.error(f"ERROR: [youtube] {vid}: Video unavailable. This video is not available")
-    monkeypatch.setattr(m, "YoutubeDL", Fake)
+    monkeypatch.setattr(engine, "YoutubeDL", Fake)
     entries = [{"id": v, "title": v, "url": f"https://www.youtube.com/watch?v={v}", "thumbnail": ""}
                 for v in (ID_NORMAL, ID_AGE, ID_OTHER)]
-    monkeypatch.setattr(m, "resolve", lambda url, folder, sub="", log=None, net=None: {
+    monkeypatch.setattr(engine, "resolve", lambda url, folder, sub="", log=None, net=None: {
         "dest": folder, "entries": entries, "is_playlist": True,
         "urls": [e["url"] for e in entries], "extras": {}, "default_album": "L", "per_song": True})
     return calls
@@ -118,9 +120,9 @@ def _fake_youtube(monkeypatch, tmp_path, second_attempt_fails=False):
 
 def _run(tmp_path, **cfg_extra):
     events = []
-    cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False,
+    cfg = dict(config.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False,
                parallel_downloads=1, **cfg_extra)
-    m.run_job("some-list", cfg, events.append, threading.Event())
+    engine.run_job("some-list", cfg, events.append, threading.Event())
     errors = {e[1]: e[2] for e in events if e[0] == "error"}
     return events, errors
 
@@ -155,10 +157,10 @@ def test_cookies_txt_is_not_modified(tmp_path):
     original = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tf6=8\n"
     file.write_text(original, encoding="utf-8")
     options = {"cookiefile": str(file), "quiet": True}
-    with m._ReadOnlyCookies(options) as op:
+    with network.ReadOnlyCookies(options) as op:
         snapshot = op["cookiefile"]
         assert snapshot != str(file) and Path(snapshot).read_text(encoding="utf-8") == original
-        with m.YoutubeDL(op) as ydl:
+        with engine.YoutubeDL(op) as ydl:
             ydl.cookiejar  # loads the cookies; on exit, yt-dlp saves them back into the copy
     assert not Path(snapshot).exists()
     assert file.read_text(encoding="utf-8") == original
@@ -180,12 +182,13 @@ def test_options_reach_yt_dlp(tmp_path, monkeypatch):
         def extract_info(self, url, download):
             return {"entries": []}
 
-    monkeypatch.setattr(m, "YoutubeDL", Spy)
+    monkeypatch.setattr(youtube, "YoutubeDL", Spy)
+    monkeypatch.setattr(engine, "YoutubeDL", Spy)
     net = {"proxy": "http://p:1", "ratelimit": 1000}
-    m.search("algo", 3, net)
-    m.analyze_url("https://www.youtube.com/watch?v=x", tmp_path, "", net)
-    cfg = dict(m.DEFAULT_CONFIG, proxy_enabled=True, proxy="http://p:1")
-    options = m.build_options(cfg, tmp_path, tmp_path, None, None, None)
+    youtube.search("algo", 3, net)
+    engine.analyze_url("https://www.youtube.com/watch?v=x", tmp_path, "", net)
+    cfg = dict(config.DEFAULT_CONFIG, proxy_enabled=True, proxy="http://p:1")
+    options = engine.build_options(cfg, tmp_path, tmp_path, None, None, None)
     assert all(v["proxy"] == "http://p:1" for v in views) and len(views) == 2
     assert options["proxy"] == "http://p:1"
 
@@ -199,16 +202,16 @@ def test_ytmusic_uses_proxy(monkeypatch):
 
         def get_playlist(self, pid, limit=None):
             return {"title": "L", "tracks": []}
-    monkeypatch.setattr(m, "YTMusic", FakeYTMusic, raising=False)
-    monkeypatch.setattr(m, "HAS_YTMUSIC", True)
-    m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1", proxy="socks5://h:1")
-    m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1")
+    monkeypatch.setattr(youtube, "YTMusic", FakeYTMusic, raising=False)
+    monkeypatch.setattr(youtube, "HAS_YTMUSIC", True)
+    youtube.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1", proxy="socks5://h:1")
+    youtube.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1")
     assert created == [{"http": "socks5://h:1", "https": "socks5://h:1"}, None]
 
 
 # ------------------------------------------------------------------ version and bundled FFmpeg
 def test_version():
-    assert m.is_newer(m.VERSION, "0.0.1")
+    assert updates.is_newer(audyax.VERSION, "0.0.1")
 
 
 def test_latest_app_version(monkeypatch):
@@ -222,19 +225,19 @@ def test_latest_app_version(monkeypatch):
         def read(self):
             return json.dumps({"tag_name": "v1.2.3"}).encode()
     requested = []
-    monkeypatch.setattr(m.urllib.request, "urlopen", lambda req, timeout: requested.append(req.full_url) or FakeResponse())
-    assert m.latest_app_version() == "1.2.3"
-    assert requested == [f"https://api.github.com/repos/{m.REPO}/releases/latest"]
+    monkeypatch.setattr(updates.urllib.request, "urlopen", lambda req, timeout: requested.append(req.full_url) or FakeResponse())
+    assert updates.latest_app_version() == "1.2.3"
+    assert requested == [f"https://api.github.com/repos/{audyax.REPO}/releases/latest"]
 
 
 def test_setup_bundled_ffmpeg(tmp_path, monkeypatch):
-    monkeypatch.setattr(m, "program_folder", lambda: tmp_path)
+    monkeypatch.setattr(system, "program_folder", lambda: tmp_path)
     monkeypatch.setenv("PATH", "/usr/bin")
-    assert m.setup_bundled_ffmpeg() == ""
+    assert system.setup_bundled_ffmpeg() == ""
     assert os.environ["PATH"] == "/usr/bin"
     (tmp_path / "ffmpeg").mkdir()
     (tmp_path / "ffmpeg" / ("ffmpeg.exe" if sys.platform.startswith("win") else "ffmpeg")).write_bytes(b"")
-    assert m.setup_bundled_ffmpeg() == str(tmp_path / "ffmpeg")
+    assert system.setup_bundled_ffmpeg() == str(tmp_path / "ffmpeg")
     assert os.environ["PATH"].split(os.pathsep)[0] == str(tmp_path / "ffmpeg")
 
 
@@ -323,18 +326,18 @@ def test_download_with_speed_limit(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
     views = []
-    real = m.YoutubeDL
+    real = engine.YoutubeDL
 
     class Spy(real):
         def __init__(self, params=None, *a, **k):
             views.append((params or {}).get("ratelimit"))
             super().__init__(params, *a, **k)
-    monkeypatch.setattr(m, "YoutubeDL", Spy)
+    monkeypatch.setattr(engine, "YoutubeDL", Spy)
     events = []
-    cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path / "dl"), audio_format="mp3", replaygain=False,
+    cfg = dict(config.DEFAULT_CONFIG, folder=str(tmp_path / "dl"), audio_format="mp3", replaygain=False,
                speed_limit_enabled=True, speed_limit_mb=4, parallel_downloads=2)
     try:
-        m.run_job(f"http://127.0.0.1:{httpd.server_address[1]}/c.m4a", cfg, events.append,
+        engine.run_job(f"http://127.0.0.1:{httpd.server_address[1]}/c.m4a", cfg, events.append,
                            threading.Event())
     finally:
         httpd.shutdown()

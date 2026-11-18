@@ -7,14 +7,13 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-
-import lyrics
-import metadata
-import engine as m
-# Imported here (before conftest replaces them) to test the real functions
-from lyrics import find_lyrics as real_find_lyrics
-from metadata import search as real_mb_search
 from test_engine import make_audio, needs_ffmpeg, needs_mutagen
+
+from audyax.core import config, lyrics, metadata, tags
+# Imported here (before conftest replaces them) to test the real functions
+from audyax.core.lyrics import find_lyrics as real_find_lyrics
+from audyax.core.metadata import search as real_mb_search
+from audyax.downloader import engine
 
 LRC = "[ar:Daft Punk]\n[00:01.50] Primera\n[00:03.00][00:10.25] Estribillo\n[00:05:5] Otra\n[01:02] Final\n"
 
@@ -71,7 +70,7 @@ def test_find_lyrics_by_search(monkeypatch):
 
 
 def test_breaker_trips_after_failures(monkeypatch):
-    from services import CircuitBreaker, ServiceUnavailable
+    from audyax.core.services import CircuitBreaker, ServiceUnavailable
     monkeypatch.setattr(lyrics, "breaker", CircuitBreaker(max_failures=2, pause=60))
 
     class FailingOpener:
@@ -203,8 +202,8 @@ def server(tmp_path_factory, monkeypatch):
 
 def _download(base, folder, **cfg_extra):
     events = []
-    cfg = dict(m.DEFAULT_CONFIG, folder=str(folder), audio_format="mp3", replaygain=False, **cfg_extra)
-    m.run_job(f"{base}/cancion.m4a", cfg, events.append, threading.Event())
+    cfg = dict(config.DEFAULT_CONFIG, folder=str(folder), audio_format="mp3", replaygain=False, **cfg_extra)
+    engine.run_job(f"{base}/cancion.m4a", cfg, events.append, threading.Event())
     done = [e[2] for e in events if e[0] == "done"]
     assert done, events
     return done[0], events
@@ -225,8 +224,8 @@ def test_musicbrainz_fills_album_year_and_cover(server, tmp_path, monkeypatch, f
     done, events = _download(server, tmp_path, musicbrainz=True, caa_cover=True)
     assert (done["album"], done["year"]) == ("Discovery", "2001")
     assert done.get("musicbrainz") is True
-    assert m.read_tags(done["path"])["year"] == "2001"  # the year is also stored IN the file
-    cover = Image.open(io.BytesIO(m.read_cover(done["path"])))
+    assert tags.read_tags(done["path"])["year"] == "2001"  # the year is also stored IN the file
+    cover = Image.open(io.BytesIO(tags.read_cover(done["path"])))
     assert cover.getpixel((150, 150))[0] > 150  # it's the red "album" one
     assert ("status", "cancion", "Buscando álbum en MusicBrainz…") in events
 
@@ -265,6 +264,6 @@ def test_download_with_lyrics(server, tmp_path, monkeypatch):
 def test_lyrics_off_by_default(server, tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(lyrics, "find_lyrics", lambda *a, **k: called.append(1))
-    assert m.DEFAULT_CONFIG["lyrics"] == "off"
+    assert config.DEFAULT_CONFIG["lyrics"] == "off"
     done, _ = _download(server, tmp_path)
     assert not called and "lyrics" not in done

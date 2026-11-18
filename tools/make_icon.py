@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from gui_app import _draw_icon  # noqa: E402
+from audyax.gui.style import _draw_icon  # noqa: E402
 
 BACKGROUND, NOTE = "#1a0b3b", "#a78bfa"
 

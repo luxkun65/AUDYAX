@@ -17,12 +17,14 @@ from pathlib import Path
 
 import pyautogui
 
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import engine as m  # noqa: E402
 
-m.CONFIG_PATH = Path(tempfile.gettempdir()) / "audyax_export_check.json"
-import gui_app as g  # noqa: E402
+from audyax.core import config  # noqa: E402
+from audyax.gui import app as g  # noqa: E402
+
+config.CONFIG_PATH = Path(tempfile.gettempdir()) / "audyax_export_check.json"
 
 pyautogui.FAILSAFE = False
 output = Path(sys.argv[1])

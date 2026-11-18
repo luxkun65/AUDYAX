@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from services import CircuitBreaker, ServiceUnavailable
+from audyax.core.services import CircuitBreaker, ServiceUnavailable
 
 MB_URL = "https://musicbrainz.org/ws/2"
 CAA_URL = "https://coverartarchive.org"

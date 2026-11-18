@@ -28,7 +28,7 @@ import PyInstaller.__main__
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from engine import VERSION  # noqa: E402
+from audyax import VERSION  # noqa: E402
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -36,7 +36,7 @@ IS_WINDOWS = sys.platform.startswith("win")
 def pyinstaller_args() -> list:
     sep = os.pathsep  # ';' on Windows, ':' on Linux/macOS (--add-data format)
     args = [
-        str(ROOT / "descargador_gui.py"),
+        str(ROOT / "main.py"),
         "--name", "AUDYAX",
         "--onedir",
         "--windowed",                              # no console window

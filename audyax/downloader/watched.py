@@ -13,7 +13,7 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
-import engine as engine
+from audyax.downloader import engine
 
 
 def is_playlist(url: str) -> bool:

@@ -5,9 +5,10 @@ import threading
 import time
 
 import pytest
-
-import player as r
 from test_engine import make_audio, needs_ffmpeg
+
+from audyax.player import bar
+from audyax.player import engine as player_engine
 
 np = pytest.importorskip("numpy")
 SPEEDUP = 8  # the fake output "listens" 8 times faster than real speakers
@@ -27,17 +28,17 @@ class FakeOutput:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
-        n = r.FRAMES_PER_BLOCK
+        n = player_engine.FRAMES_PER_BLOCK
         while not self.closed.is_set():
-            buf = bytearray(n * r.BYTES_PER_FRAME)
+            buf = bytearray(n * player_engine.BYTES_PER_FRAME)
             try:
                 self.callback(buf, n)
-            except r.StopPlayback:
+            except player_engine.StopPlayback:
                 self.played += buf
                 self.on_finish()
                 return
             self.played += buf
-            time.sleep(n / r.SAMPLE_RATE / SPEEDUP)
+            time.sleep(n / player_engine.SAMPLE_RATE / SPEEDUP)
 
     def close(self):
         self.closed.set()
@@ -48,7 +49,7 @@ class FakeOutput:
 def engine():
     FakeOutput.instances.clear()
     end = threading.Event()
-    eng = r.AudioEngine(on_finish=end.set, output_factory=FakeOutput)
+    eng = player_engine.AudioEngine(on_finish=end.set, output_factory=FakeOutput)
     eng.end = end
     yield eng
     eng.stop()
@@ -134,13 +135,13 @@ def test_stop_does_not_count_as_end(engine, tmp_path):
 
 
 def test_format_time():
-    assert r._format_time(0) == "0:00"
-    assert r._format_time(65.9) == "1:05"
-    assert r._format_time(-3) == "0:00"
+    assert bar._format_time(0) == "0:00"
+    assert bar._format_time(65.9) == "1:05"
+    assert bar._format_time(-3) == "0:00"
 
 
 def test_audio_available_returns_reason():
-    ok, reason = r.audio_available()
+    ok, reason = player_engine.audio_available()
     assert isinstance(ok, bool) and (ok or reason)
 
 
@@ -158,5 +159,5 @@ def test_audio_available_when_portaudio_fails(monkeypatch):
         return original(name, *a, **k)
     monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    ok, reason = r.audio_available()
+    ok, reason = player_engine.audio_available()
     assert not ok and "no se pudo iniciar el audio" in reason
