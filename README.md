@@ -33,7 +33,11 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
   - **Speed limit** in MB/s (total, shared among parallel downloads).
   - **Proxy** (`http://`, `https://`, `socks5://`…), used for downloads, searches and YouTube Music playlists.
   - **Cookies** from your browser session (Firefox recommended) or a `cookies.txt` file, **used only for age-restricted videos**: every song is first tried without them, and only if YouTube asks to confirm the age is that song retried with your session. On Windows, Chrome/Edge and other Chromium browsers no longer let other programs read their cookies, so use Firefox or a `cookies.txt` export. Using your account with download tools may get it rate-limited by YouTube; a secondary account is safer.
-- Light and dark themes; settings are saved in `~/.descargador_musica.json` (tabs *General*, *Descargas*, *Avanzado*).
+- **Lyrics** (*Configuración → Letras y álbum*, off by default): after each song, AUDYAX looks up its lyrics in [LRCLIB](https://lrclib.net) (time-synced when available) and saves them as a `.lrc` file next to the song, inside the file's tags (MP3 `USLT`, M4A `©lyr`, Opus `LYRICS`), or both.
+- **Better album, year and cover**: when YouTube doesn't give the album or the year (the "—" in the list), AUDYAX looks the song up in [MusicBrainz](https://musicbrainz.org) and fills them in, and uses the album cover from the [Cover Art Archive](https://coverartarchive.org) instead of the video thumbnail. It is conservative: if the match is not clear (title, artist and duration), nothing is changed. On by default; each part can be turned off. If a service is down, it is skipped for 5 minutes so downloads don't slow down.
+- **Mini player**: double-click a downloaded song (or right-click → *Reproducir*) to listen without leaving the app: play/pause, previous/next (following the list as it's filtered and sorted), seek bar, volume (remembered), and the synced lyrics line by line if the song has them. Needs `sounddevice` and `numpy` (in `requirements.txt`; on Linux also `sudo apt install libportaudio2`).
+- **Watched playlists** (*Vigiladas* in the sidebar): save a playlist or album and AUDYAX checks whether it has new songs (on startup, or with *Revisar*) and downloads only those, to the same folder, using `descargados.txt`. After downloading a playlist, AUDYAX offers to watch it. Optionally, new songs can be downloaded automatically (*Configuración → Descargas*).
+- Light and dark themes; settings are saved in `~/.audyax.json` (older versions used `~/.descargador_musica.json`; it is migrated automatically on first start) (tabs *General*, *Descargas*, *Letras y álbum*, *Avanzado*).
 
 ## Download (Windows, no Python needed)
 
@@ -43,7 +47,7 @@ Get the latest `AUDYAX-x.y.z-windows.zip` from [Releases](https://github.com/lux
 
 - Python **3.11+**
 - [FFmpeg](https://ffmpeg.org/download.html) installed and available in the `PATH`
-- On Linux, tkinter: `sudo apt install python3-tk`
+- On Linux, tkinter and PortAudio (for the mini player): `sudo apt install python3-tk libportaudio2`
 
 ## Installation
 
@@ -58,7 +62,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python descargador_gui.py
+python main.py
 ```
 
 Paste a YouTube or YouTube Music link (song or playlist), choose the destination folder, format and options, and press **Descargar**.
@@ -71,19 +75,19 @@ Paste a YouTube or YouTube Music link (song or playlist), choose the destination
 
 ```bash
 pip install -r requirements-dev.txt
-python tools/descargar_ffmpeg.py   # Windows: downloads FFmpeg (LGPL build) to vendor/ffmpeg
+python tools/download_ffmpeg.py    # Windows: downloads FFmpeg (LGPL build) to vendor/ffmpeg
 python build.py --zip
 ```
 
 The program is created in `dist/AUDYAX/` (`AUDYAX.exe` + `_internal/` + `ffmpeg/`) and zipped as `dist/AUDYAX-<version>-windows.zip`. It is a folder rather than a single `.exe` because FFmpeg is over 100 MB: inside a single file it would have to be unpacked on every start. Build it on the same operating system you will run it on.
 
-`AUDYAX.exe --prueba-arranque resultado.json` starts the program, checks that everything is bundled and that FFmpeg works, writes the result and exits (used by CI).
+`AUDYAX.exe --self-test result.json` (or `python main.py --self-test result.json`) starts the program, checks that everything is bundled and that FFmpeg works, writes the result and exits (used by CI).
 
 ### Publishing a version
 
 GitHub Actions (`.github/workflows/windows.yml`) runs the tests on Windows, builds the program and self-tests it on every pull request (the zip is downloadable from the run's *Artifacts*). To publish a release:
 
-1. Update `VERSION` in `motor_descarga.py` (e.g. `1.0.1`) and merge it into `main`.
+1. Update `VERSION` in `audyax/__init__.py` (e.g. `1.0.1`) and merge it into `main`.
 2. `git tag v1.0.1 && git push origin v1.0.1`
 
 The workflow then attaches the zip to a new GitHub Release.
@@ -99,15 +103,56 @@ The tests don't need internet. The ones that generate audio need FFmpeg and are 
 
 ## Project structure
 
-| File | Purpose |
-|---|---|
-| `motor_descarga.py` | Download engine: yt-dlp options, post-processing, tags, ReplayGain, settings. No GUI code; it communicates through events, so it can be used from any interface. |
-| `descargador_gui.py` | Graphical interface (customtkinter + Pillow). |
-| `escritorio.py` | System tray icon and notifications (optional: AUDYAX works without them). |
-| `build.py` | Builds the program with PyInstaller (with FFmpeg and the icon). |
-| `tools/` | Download FFmpeg for the build, generate the icon, check the self-test. |
-| `assets/` | Application icon. |
-| `tests/` | Automated tests (pytest). |
+The code is split in two parts that share a common core, so the music player (part 2) can grow
+without touching the downloader:
+
+```
+main.py                      entry point (python main.py)
+audyax/
+  core/                      shared by the downloader and the player; no UI code
+    config.py                saved settings and their defaults (+ migration of old settings)
+    tags.py                  read/write tags and covers (mutagen), rename files, file info
+    replaygain.py            loudness analysis and ReplayGain tags
+    lyrics.py                lyrics from LRCLIB, .lrc files, embedded lyrics, LRC parsing
+    metadata.py              MusicBrainz (album, year) and Cover Art Archive covers
+    services.py              circuit breaker for the online services
+    system.py                program folder and bundled FFmpeg
+  downloader/                part 1: downloading; no UI code (it talks to the UI with events)
+    engine.py                yt-dlp options, postprocessors, the download job (run_job)
+    youtube.py               YouTube / YouTube Music links and playlists, search by name
+    network.py               speed limit, proxy and cookies
+    updates.py               yt-dlp and AUDYAX updates
+    export.py                .m3u and .csv export
+    watched.py               watched playlists: which songs are new
+  player/                    part 2: music player
+    engine.py                audio engine (FFmpeg -> sounddevice); no UI code
+    bar.py                   mini player bar
+  gui/                       graphical interface (customtkinter + Pillow)
+    app.py                   main window (App) and --self-test
+    song_list.py             song list: rows, filter, sort, selection, export
+    detail.py                detail panel of the selected song
+    settings.py              settings window
+    dialogs.py               search results, export and tag editor windows
+    watched_window.py        watched playlists window
+    player_panel.py          connects the list with the mini player
+    desktop.py               system tray icon and notifications (optional)
+    style.py, widgets.py     colors, icons, image helpers, small widgets
+build.py                     builds the program with PyInstaller (with FFmpeg and the icon)
+tools/                       download FFmpeg for the build, generate the icon, CI checks
+assets/                      application icon
+tests/                       automated tests (pytest)
+```
+
+The files AUDYAX writes in your music folder keep their names: `descargados.txt` (already
+downloaded songs), `faltantes.txt` (failures) and `descarga.log`.
+
+## Contributing
+
+- **All code is in English**: names, comments, docstrings and commit messages. Text shown to the
+  user (buttons, messages, notifications, the log) stays in Spanish.
+- `audyax/core`, `audyax/downloader` and `audyax/player/engine.py` must not import tkinter or
+  customtkinter, so they can be tested and reused without a window.
+- Run `python -m pytest` before opening a pull request.
 
 ## Disclaimer
 
