@@ -27,12 +27,12 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
 - **Optional folder organization** (*Configuración → Organizar descargas*, off by default): keep everything in one folder, or sort songs into `Artist/` or `Artist/Album/` subfolders using their tags. Playlists can still go together in their own folder.
 - **Notifications**: a system notification when all downloads finish (only if AUDYAX is not in front). Can be turned off.
-- **System tray**: minimizing hides AUDYAX next to the clock while it keeps downloading (click the icon to bring it back; right-click for *Pause* / *Exit*). Closing the window with downloads in progress asks whether to keep downloading in the tray. Can be turned off.
+- **Keep running in the background**: closing the window (X) keeps AUDYAX running next to the clock in the system tray, still downloading (click the icon to bring it back; right-click for *Pause* / *Exit* to quit for real). Minimizing works as usual. On by default; can be turned off in *Configuración → General*, and then X closes the program (asking first if downloads are in progress).
 - **Keyboard shortcuts**: `Ctrl+V` pastes a copied link and starts downloading it, `Supr`/`Delete` removes the selected (or checked) rows from the list (files are not deleted), `Ctrl+F` searches the list.
 - **Advanced options** (*Configuración → Avanzado*, all off by default):
   - **Speed limit** in MB/s (total, shared among parallel downloads).
   - **Proxy** (`http://`, `https://`, `socks5://`…), used for downloads, searches and YouTube Music playlists.
-  - **Cookies** from your browser session (Firefox recommended) or a `cookies.txt` file, for age-restricted videos. On Windows, Chrome/Edge and other Chromium browsers no longer let other programs read their cookies, so use Firefox or a `cookies.txt` export. Using your account with download tools may get it rate-limited by YouTube; a secondary account is safer.
+  - **Cookies** from your browser session (Firefox recommended) or a `cookies.txt` file, **used only for age-restricted videos**: every song is first tried without them, and only if YouTube asks to confirm the age is that song retried with your session. On Windows, Chrome/Edge and other Chromium browsers no longer let other programs read their cookies, so use Firefox or a `cookies.txt` export. Using your account with download tools may get it rate-limited by YouTube; a secondary account is safer.
 - Light and dark themes; settings are saved in `~/.descargador_musica.json` (tabs *General*, *Descargas*, *Avanzado*).
 
 ## Download (Windows, no Python needed)

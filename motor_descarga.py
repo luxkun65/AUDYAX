@@ -82,7 +82,7 @@ CONFIG_POR_DEFECTO = {
     "playlists_en_carpeta": True,    # las playlists van juntas en su carpeta aunque se organice
     "descargas_simultaneas": 2,      # canciones que se bajan a la vez (1 = una tras otra)
     "notificaciones": True,          # avisar cuando terminan las descargas
-    "bandeja": True,                 # al minimizar, esconder en la bandeja del sistema
+    "segundo_plano": True,           # al cerrar con la X, seguir abierto en la bandeja del sistema
     # Opciones avanzadas (todas apagadas al principio)
     "limite_velocidad_activo": False,
     "limite_velocidad_mb": 2.0,      # MB/s en total (se reparte entre las descargas simultáneas)
@@ -110,9 +110,17 @@ MODOS_ORGANIZAR = {
 # ==============================================================================
 # MOTOR DE DESCARGA (sin nada de interfaz; se comunica enviando eventos)
 # ==============================================================================
+# Mensajes con los que YouTube pide confirmar la edad (solo en estos casos se usan las cookies)
+ES_RESTRICCION_EDAD = re.compile(
+    r"confirm your age|age[- ]?restricted|inappropriate for some users|age verification|"
+    r"confirmar tu edad|restricci[oó]n de edad", re.IGNORECASE)
+
+
 def opciones_red(cfg: dict) -> dict:
-    """Opciones avanzadas de yt-dlp según la configuración (vacío si están apagadas).
-    Se usan en TODAS las consultas: descargas, búsqueda y lectura de playlists."""
+    """Límite de velocidad y proxy según la configuración (vacío si están apagados).
+    Se usan en TODAS las consultas: descargas, búsqueda y lectura de playlists.
+    Las cookies NO van aquí: solo se usan para videos con restricción de edad
+    (ver opciones_cookies y ejecutar_trabajo)."""
     op = {}
     if cfg.get("limite_velocidad_activo"):
         try:
@@ -125,14 +133,21 @@ def opciones_red(cfg: dict) -> dict:
     proxy = (cfg.get("proxy") or "").strip()
     if cfg.get("proxy_activo") and PROXY_VALIDO.match(proxy):
         op["proxy"] = proxy
-    if cfg.get("cookies_activo"):
-        origen = cfg.get("cookies_origen") or "firefox"
-        if origen == "archivo":
-            if cfg.get("cookies_archivo") and Path(cfg["cookies_archivo"]).is_file():
-                op["cookiefile"] = cfg["cookies_archivo"]
-        elif origen in NAVEGADORES_COOKIES:
-            op["cookiesfrombrowser"] = (origen,)
     return op
+
+
+def opciones_cookies(cfg: dict) -> dict:
+    """Cookies de la sesión de YouTube (vacío si la opción está apagada o mal configurada)."""
+    if not cfg.get("cookies_activo"):
+        return {}
+    origen = cfg.get("cookies_origen") or "firefox"
+    if origen == "archivo":
+        if cfg.get("cookies_archivo") and Path(cfg["cookies_archivo"]).is_file():
+            return {"cookiefile": cfg["cookies_archivo"]}
+        return {}
+    if origen in NAVEGADORES_COOKIES:
+        return {"cookiesfrombrowser": (origen,)}
+    return {}
 
 
 class _CookiesSoloLectura:
@@ -814,7 +829,21 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
     log = configurar_log(carpeta)
     conocidas = {}  # id -> entrada (para que faltantes.txt diga QUÉ canción falló)
 
+    cookies = opciones_cookies(cfg)
+    por_edad = []          # canciones con restricción de edad que se reintentarán con cookies
+    reintentadas = set()   # (las que ya se reintentaron: si vuelven a fallar, es un error normal)
+
     def al_fallar(id_video, motivo):
+        if ES_RESTRICCION_EDAD.search(motivo) and id_video != "?":
+            if cookies and id_video not in reintentadas:
+                # No es un error todavía: se vuelve a intentar con la sesión del usuario
+                if id_video not in por_edad:
+                    por_edad.append(id_video)
+                emitir(("estado", id_video, "Restricción de edad: usando tu sesión…"))
+                return
+            if not cookies:
+                motivo += (" (Video con restricción de edad: actívalo en Configuración → "
+                           "Avanzado → Cookies)")
         e = conocidas.get(id_video) or {}
         if e.get("disponible") is False:
             motivo += (" (YouTube Music la muestra en gris: no está disponible en tu país "
@@ -887,25 +916,28 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
     registro = []
     reservas = ReservaNombres()
 
-    def bajar(lote, id_video):
+    def bajar(lote, id_video, con_cookies=False):
         """Baja una canción (o la URL entera si no se pudo separar). Cada hilo usa su propio
-        YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app."""
+        YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app.
+        con_cookies: solo en el reintento de un video con restricción de edad."""
         if id_video in omitir:
             return  # cancelada antes de empezar: ni siquiera ocupa un cupo
         with limite:
             esperar_si_pausa(pausa, cancelar, id_video, omitir)
             opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
                                           organizar)
+            if con_cookies:
+                opciones.update(cookies)
             with _CookiesSoloLectura(opciones) as opciones, YoutubeDL(opciones) as ydl:
                 agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
                                          plan["extras"], plan["album_defecto"], organizar,
                                          reservas, pausa, omitir)
                 ydl.download(lote)
 
-    def bajar_seguro(par):
+    def bajar_seguro(par, con_cookies=False):
         lote, id_video = par
         try:
-            bajar(lote, id_video)
+            bajar(lote, id_video, con_cookies)
         except DownloadCancelled:
             pass
         except Exception as e:  # un fallo inesperado no debe tumbar las demás canciones
@@ -921,6 +953,15 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
                 if cancelar.is_set():
                     break
                 bajar_seguro(par)
+
+    # 2b) Videos con restricción de edad: segundo intento, ahora sí con las cookies
+    url_de = {e["id"]: u for u, e in zip(plan["urls"], entradas)} if plan.get("por_cancion") else {}
+    for id_video in list(por_edad):
+        if cancelar.is_set():
+            break
+        reintentadas.add(id_video)
+        bajar_seguro(([url_de.get(id_video) or f"https://www.youtube.com/watch?v={id_video}"], id_video),
+                     con_cookies=True)
     if cancelar.is_set():
         raise DownloadCancelled("Cancelado por el usuario")
 

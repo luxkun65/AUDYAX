@@ -18,7 +18,7 @@ def test_avanzadas_apagadas_por_defecto():
     cfg = m.CONFIG_POR_DEFECTO
     assert not cfg["limite_velocidad_activo"] and not cfg["proxy_activo"] and not cfg["cookies_activo"]
     assert m.opciones_red(cfg) == {}
-    assert cfg["notificaciones"] and cfg["bandeja"]
+    assert cfg["notificaciones"] and cfg["segundo_plano"]
 
 
 def test_limite_de_velocidad_se_reparte():
@@ -49,17 +49,104 @@ def test_proxy(proxy, valido):
 
 def test_cookies(tmp_path):
     cfg = dict(m.CONFIG_POR_DEFECTO, cookies_activo=True)
-    assert m.opciones_red(cfg) == {"cookiesfrombrowser": ("firefox",)}
+    assert m.opciones_red(cfg) == {}  # las cookies nunca van en las opciones generales
+    assert m.opciones_cookies(cfg) == {"cookiesfrombrowser": ("firefox",)}
     cfg["cookies_origen"] = "edge"
-    assert m.opciones_red(cfg) == {"cookiesfrombrowser": ("edge",)}
+    assert m.opciones_cookies(cfg) == {"cookiesfrombrowser": ("edge",)}
     cfg["cookies_origen"] = "inventado"
-    assert m.opciones_red(cfg) == {}
+    assert m.opciones_cookies(cfg) == {}
     cfg["cookies_origen"] = "archivo"
-    assert m.opciones_red(cfg) == {}  # sin archivo elegido
+    assert m.opciones_cookies(cfg) == {}  # sin archivo elegido
     archivo = tmp_path / "cookies.txt"
     archivo.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
     cfg["cookies_archivo"] = str(archivo)
-    assert m.opciones_red(cfg) == {"cookiefile": str(archivo)}
+    assert m.opciones_cookies(cfg) == {"cookiefile": str(archivo)}
+    cfg["cookies_activo"] = False
+    assert m.opciones_cookies(cfg) == {}
+
+
+@pytest.mark.parametrize("motivo, es_edad", [
+    ("Sign in to confirm your age. This video may be inappropriate for some users.", True),
+    ("This video is age-restricted and only available on YouTube", True),
+    ("Sign in to confirm you're not a bot", False),  # comprobación de bot: NO es por edad
+    ("Video unavailable. This video is not available", False),
+    ("Private video. Sign in if you've been granted access", False),
+])
+def test_deteccion_restriccion_de_edad(motivo, es_edad):
+    assert bool(m.ES_RESTRICCION_EDAD.search(motivo)) is es_edad
+
+
+ID_EDAD, ID_NORMAL, ID_OTRO = "edadEdad123", "normalNorm1", "otroOtro123"
+
+
+def _youtube_simulado(monkeypatch, tmp_path, segundo_intento_falla=False):
+    """YoutubeDL falso: ID_EDAD pide confirmar la edad si no lleva cookies; ID_OTRO no existe."""
+    llamadas = []
+
+    class Falso:
+        def __init__(self, params):
+            self.params = params
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def add_post_processor(self, *a, **k):
+            pass
+
+        def download(self, urls):
+            con_cookies = "cookiesfrombrowser" in self.params or "cookiefile" in self.params
+            for url in urls:
+                vid = url.rsplit("=", 1)[-1]
+                llamadas.append((vid, con_cookies))
+                log = self.params["logger"]
+                if vid == ID_EDAD and (not con_cookies or segundo_intento_falla):
+                    log.error(f"ERROR: [youtube] {vid}: Sign in to confirm your age. This video may "
+                              "be inappropriate for some users.")
+                elif vid == ID_OTRO:
+                    log.error(f"ERROR: [youtube] {vid}: Video unavailable. This video is not available")
+    monkeypatch.setattr(m, "YoutubeDL", Falso)
+    entradas = [{"id": v, "titulo": v, "url": f"https://www.youtube.com/watch?v={v}", "miniatura": ""}
+                for v in (ID_NORMAL, ID_EDAD, ID_OTRO)]
+    monkeypatch.setattr(m, "resolver", lambda url, carpeta, sub="", log=None, red=None: {
+        "destino": carpeta, "entradas": entradas, "es_playlist": True,
+        "urls": [e["url"] for e in entradas], "extras": {}, "album_defecto": "L", "por_cancion": True})
+    return llamadas
+
+
+def _correr(tmp_path, **cfg_extra):
+    eventos = []
+    cfg = dict(m.CONFIG_POR_DEFECTO, carpeta=str(tmp_path), formato="mp3", replaygain=False,
+               descargas_simultaneas=1, **cfg_extra)
+    m.ejecutar_trabajo("lista", cfg, eventos.append, threading.Event())
+    errores = {e[1]: e[2] for e in eventos if e[0] == "error"}
+    return eventos, errores
+
+
+def test_cookies_solo_para_restriccion_de_edad(tmp_path, monkeypatch):
+    llamadas = _youtube_simulado(monkeypatch, tmp_path)
+    eventos, errores = _correr(tmp_path, cookies_activo=True)
+    # Todas sin cookies; SOLO la de edad se reintenta con cookies; la que no existe no se reintenta
+    assert llamadas == [(ID_NORMAL, False), (ID_EDAD, False), (ID_OTRO, False), (ID_EDAD, True)]
+    assert list(errores) == [ID_OTRO]  # la de edad no cuenta como error
+    assert ("estado", ID_EDAD, "Restricción de edad: usando tu sesión…") in eventos
+    assert ID_EDAD not in (tmp_path / "faltantes.txt").read_text(encoding="utf-8")
+
+
+def test_sin_cookies_activadas_no_se_usan_y_se_explica(tmp_path, monkeypatch):
+    llamadas = _youtube_simulado(monkeypatch, tmp_path)
+    _, errores = _correr(tmp_path, cookies_activo=False)
+    assert all(not con for _, con in llamadas) and len(llamadas) == 3
+    assert "Configuración → Avanzado → Cookies" in errores[ID_EDAD]
+
+
+def test_si_con_cookies_tambien_falla_es_un_error(tmp_path, monkeypatch):
+    llamadas = _youtube_simulado(monkeypatch, tmp_path, segundo_intento_falla=True)
+    eventos, errores = _correr(tmp_path, cookies_activo=True)
+    assert llamadas.count((ID_EDAD, True)) == 1  # un solo reintento
+    assert ID_EDAD in errores and len([e for e in eventos if e[0] == "error" and e[1] == ID_EDAD]) == 1
 
 
 def test_cookies_txt_no_se_modifica(tmp_path):

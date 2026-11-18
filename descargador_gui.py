@@ -727,6 +727,7 @@ class App(ctk.CTk, *_BASES_DND):
         self._vista_programada = False
         self.ventana_resultados = None
         self.lote = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
+        self._avisado_segundo_plano = False
         self.bandeja = Bandeja(self._imagen_bandeja(),
                                al_abrir=lambda: self.eventos.put(("bandeja", "abrir")),
                                al_pausar=lambda: self.eventos.put(("bandeja", "pausa")),
@@ -747,7 +748,6 @@ class App(ctk.CTk, *_BASES_DND):
 
         self._construir()
         self.protocol("WM_DELETE_WINDOW", self._al_cerrar_ventana)
-        self.bind("<Unmap>", self._al_minimizar, add=True)
         self._configurar_atajos()
         self.after(100, self._procesar_eventos)
         self.after(400, self._revisar_ffmpeg)
@@ -1126,9 +1126,11 @@ class App(ctk.CTk, *_BASES_DND):
         self._nota_cfg(t, "Solo avisa si AUDYAX no está en primer plano (minimizado, en la bandeja "
                           "o detrás de otra ventana)." if hay_notif else
                        "No disponible: falta la librería plyer (pip install plyer).")
-        self._interruptor_cfg(t, "Al minimizar, pasar a la bandeja del sistema", "bandeja",
+        self._interruptor_cfg(t, "Seguir en segundo plano al cerrar (X)", "segundo_plano",
                               estado="normal" if hay_bandeja else "disabled")
-        self._nota_cfg(t, "Sigue descargando junto al reloj; clic en su icono para volver a abrirlo."
+        self._nota_cfg(t, "Al cerrar la ventana, AUDYAX sigue abierto junto al reloj (y sigue "
+                          "descargando). Clic en su icono para volver; para salir del todo: clic "
+                          "derecho en el icono → Salir. Minimizar funciona como siempre."
                        if hay_bandeja else "No disponible en este sistema (" + (motivo_sin_bandeja() or
                                                                                   "falta pystray") + ").")
 
@@ -1377,7 +1379,7 @@ class App(ctk.CTk, *_BASES_DND):
             "playlists_en_carpeta": bool(self.cfg.get("playlists_en_carpeta", True)),
             "descargas_simultaneas": descargas_simultaneas(self.cfg),
             **{k: self.cfg.get(k, CONFIG_POR_DEFECTO[k]) for k in (
-                "notificaciones", "bandeja", "limite_velocidad_activo", "limite_velocidad_mb",
+                "notificaciones", "segundo_plano", "limite_velocidad_activo", "limite_velocidad_mb",
                 "proxy_activo", "proxy", "cookies_activo", "cookies_origen", "cookies_archivo")},
         }
 
@@ -2229,16 +2231,6 @@ class App(ctk.CTk, *_BASES_DND):
             en_curso = sum(1 for f in self.filas.values() if f["color"] == "amarillo")
             self.bandeja.actualizar_texto(f"AUDYAX — {en_curso} en proceso" if en_curso else "AUDYAX")
 
-    def _al_minimizar(self, evento):
-        if evento.widget is not self:
-            return
-        try:
-            minimizada = self.state() == "iconic"
-        except tk.TclError:
-            return
-        if minimizada and self.cfg.get("bandeja", True) and bandeja_disponible():
-            self.after(50, self._a_bandeja)
-
     def _a_bandeja(self) -> bool:
         """Esconde la ventana y deja AUDYAX como icono junto al reloj."""
         if not self.bandeja.mostrar("AUDYAX"):
@@ -2335,21 +2327,20 @@ class App(ctk.CTk, *_BASES_DND):
 
     # ---------------------------------------------------------------- cierre
     def _al_cerrar_ventana(self):
-        """Botón X. Con descargas en curso pregunta antes de cerrar."""
-        if self.pendientes > 0:
-            if self.cfg.get("bandeja", True) and bandeja_disponible():
-                r = messagebox.askyesnocancel(
-                    "Descargas en curso",
-                    "Hay descargas en curso.\n\n"
-                    "• Sí: seguir descargando con AUDYAX en la bandeja del sistema.\n"
-                    "• No: cancelarlas y cerrar.")
-                if r is None:
-                    return
-                if r and self._a_bandeja():
-                    return
-            elif not messagebox.askyesno("Descargas en curso",
-                                         "Hay descargas en curso. ¿Cancelarlas y cerrar AUDYAX?"):
-                return
+        """Botón X. Con "Seguir en segundo plano" (activado por defecto), AUDYAX no se cierra:
+        se esconde junto al reloj y sigue descargando. Para salir del todo: icono → Salir.
+        Sin esa opción (o sin bandeja en el sistema) se cierra, preguntando si hay descargas."""
+        if self.cfg.get("segundo_plano", True) and bandeja_disponible() and self._a_bandeja():
+            if not self._avisado_segundo_plano:
+                self._avisado_segundo_plano = True  # se explica solo la primera vez
+                titulo = "AUDYAX sigue en segundo plano"
+                mensaje = "Está junto al reloj. Para salir del todo: clic derecho en su icono → Salir."
+                if self.cfg.get("notificaciones", True) and not self.bandeja.notificar(titulo, mensaje):
+                    notificar(titulo, mensaje, str(ruta_recurso("audyax.ico")))
+            return
+        if self.pendientes > 0 and not messagebox.askyesno(
+                "Descargas en curso", "Hay descargas en curso. ¿Cancelarlas y cerrar AUDYAX?"):
+            return
         self._cerrar()
 
     def _cerrar(self):
