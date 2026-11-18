@@ -48,7 +48,7 @@ from audyax.gui.player_panel import PlayerMixin
 from audyax.gui.settings import SettingsMixin
 from audyax.gui.song_list import COLUMN_WIDTHS, SongListMixin, setup_columns
 from audyax.gui.style import (STATUS_COLORS, C, _draw_icon, choose_font, empty_image, equalizer_image, fetch_bytes,
-                              icon, resource_path, shorten)
+                              icon, logo, resource_path, shorten)
 from audyax.gui.watched_window import WatchedMixin
 from audyax.gui.widgets import Notice
 from audyax.player.engine import audio_available
@@ -397,7 +397,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         sidebar.grid(row=0, column=0, sticky="ns")
         sidebar.grid_propagate(False)
         sidebar.pack_propagate(False)
-        ctk.CTkLabel(sidebar, text="", image=icon("note", 44, C["accent"])).pack(pady=(18, 18))
+        ctk.CTkLabel(sidebar, text="", image=logo(56)).pack(pady=(16, 14))
 
         def item(text, ico, active=False, command=None):
             ctk.CTkButton(sidebar, text=text, image=icon(ico, 26, C["text"] if active else C["muted"]),
@@ -425,11 +425,11 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _about(self):
         top = ctk.CTkToplevel(self)
         top.title("Acerca de AUDYAX")
-        top.geometry("420x400")
+        top.geometry("420x440")
         top.resizable(False, False)
         top.transient(self)
         top.configure(fg_color=C["bg"])
-        ctk.CTkLabel(top, text="", image=icon("note", 44, C["accent"])).pack(pady=(22, 4))
+        ctk.CTkLabel(top, text="", image=logo(72)).pack(pady=(20, 6))
         ctk.CTkLabel(top, text="AUDYAX", font=self.f_detail).pack()
         ctk.CTkLabel(top, text=f"Versión {VERSION}  ·  yt-dlp {ytdlp_version()}", font=self.f_small,
                      text_color=C["muted"]).pack()
