@@ -1140,6 +1140,35 @@ def _primero(valor) -> str:
     return str(valor or "")
 
 
+def nombre_archivo_valido(texto: str, extension: str = "") -> str:
+    """Convierte lo que escribe el usuario en un nombre de archivo válido (sin extensión):
+    quita caracteres prohibidos en Windows (\\ / : * ? " < > |), espacios y puntos sobrantes,
+    y la extensión si la escribió (p. ej. "Canción.mp3" -> "Canción")."""
+    texto = (texto or "").strip()
+    if extension and texto.lower().endswith(extension.lower()):
+        texto = texto[: -len(extension)]
+    return sanitize_filename(texto).strip().rstrip(". ").strip()
+
+
+def renombrar_archivo(ruta, nuevo_nombre: str) -> Path:
+    """Cambia el nombre del archivo (la extensión se conserva) y devuelve la ruta nueva.
+    Nunca sobrescribe otro archivo: si ya existe uno con ese nombre, lanza FileExistsError.
+    Sí permite cambiar solo mayúsculas/minúsculas ("cancion" -> "Canción")."""
+    ruta = Path(ruta)
+    nombre = nombre_archivo_valido(nuevo_nombre, ruta.suffix)
+    if not nombre:
+        raise ValueError("El nombre del archivo no puede quedar vacío.")
+    destino = ruta.with_name(nombre + ruta.suffix)
+    # Se compara el texto exacto: en Windows "cancion.mp3" == "Cancion.mp3" como rutas, y
+    # entonces un cambio solo de mayúsculas no se haría.
+    if destino.name == ruta.name:
+        return ruta
+    if destino.exists() and not os.path.samefile(destino, ruta):
+        raise FileExistsError(f"Ya existe «{destino.name}» en esa carpeta.")
+    ruta.rename(destino)
+    return destino
+
+
 def leer_etiquetas(ruta) -> dict:
     """Título, artista, álbum, año y género que tiene guardados el archivo."""
     ruta = Path(ruta)

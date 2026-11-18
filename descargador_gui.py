@@ -64,9 +64,11 @@ from motor_descarga import (
     info_archivo,
     leer_etiquetas,
     leer_portada,
+    nombre_archivo_valido,
     opciones_red,
     preparar_ffmpeg_incluido,
     puede_actualizarse,
+    renombrar_archivo,
     se_puede_editar,
     ultima_version_app,
     ultima_version_ytdlp,
@@ -589,6 +591,56 @@ class VentanaResultados(ctk.CTkToplevel):
 
 
 # ==============================================================================
+# EXPORTAR
+# ==============================================================================
+class VentanaExportar(ctk.CTkToplevel):
+    """Elegir qué exportar: lista de reproducción .m3u o tabla .csv."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Exportar")
+        self.geometry("460x330")
+        self.resizable(False, False)
+        self.transient(app)
+        self.configure(fg_color=C["bg"])
+        vista = app._filas_en_vista()
+        descargadas = sum(1 for v in vista if app.filas[v]["color"] == "verde" and app.filas[v]["ruta"]
+                          and Path(app.filas[v]["ruta"]).exists())
+        filtrada = len(vista) != len(app.filas)
+
+        ctk.CTkLabel(self, text="  Exportar", image=icono("export", 18), compound="left",
+                     font=app.f_det, anchor="w").pack(fill="x", padx=18, pady=(14, 2))
+        ctk.CTkLabel(self, text="Se exporta lo que se ve en la lista" + (" (con el filtro actual)." if filtrada
+                                                                          else "."),
+                     font=app.f_peq, text_color=C["suave"], anchor="w").pack(fill="x", padx=18, pady=(0, 10))
+        self.btn_m3u = self._opcion(
+            "Lista de reproducción (.m3u)",
+            f"{descargadas} {'canción descargada' if descargadas == 1 else 'canciones descargadas'} · "
+            "para abrir en VLC, foobar2000, Winamp…", app._exportar_m3u, descargadas > 0)
+        self.btn_csv = self._opcion(
+            "Tabla (.csv)", f"{len(vista)} {'fila' if len(vista) == 1 else 'filas'} · "
+            "título, artista, álbum, estado… para Excel", app._exportar_csv, len(vista) > 0)
+        app._boton(self, "Cerrar", self.destroy, width=100, height=34).pack(anchor="e", padx=18, pady=(4, 12))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.after(150, self.focus)
+
+    def _opcion(self, titulo, detalle, accion, activo):
+        marco = self.app._tarjeta(self)
+        marco.pack(fill="x", padx=18, pady=5)
+
+        def elegir():
+            self.destroy()       # primero se cierra esta ventana; luego sale "Guardar como"
+            self.app.after(50, accion)
+        boton = self.app._boton(marco, titulo, elegir, icono("export", 16, C["sobre_acento"]),
+                                acento=True, height=36, width=300, state="normal" if activo else "disabled")
+        boton.pack(anchor="w", padx=12, pady=(10, 2))
+        ctk.CTkLabel(marco, text=detalle, font=self.app.f_peq, text_color=C["suave"], anchor="w",
+                     justify="left", wraplength=400).pack(fill="x", padx=14, pady=(0, 10))
+        return boton
+
+
+# ==============================================================================
 # EDITOR DE ETIQUETAS
 # ==============================================================================
 class VentanaEtiquetas(ctk.CTkToplevel):
@@ -601,7 +653,7 @@ class VentanaEtiquetas(ctk.CTkToplevel):
         super().__init__(app)
         self.app, self.vid, self.ruta = app, vid, ruta
         self.title("Editar etiquetas")
-        self.geometry("640x400")
+        self.geometry("660x470")
         self.resizable(False, False)
         self.transient(app)
         self.configure(fg_color=C["bg"])
@@ -638,6 +690,31 @@ class VentanaEtiquetas(ctk.CTkToplevel):
                          fg_color=C["input"], border_color=C["borde"], text_color=C["texto"]).grid(
                 row=i, column=1, sticky="ew", pady=5)
 
+        # Nombre del archivo (sin extensión). Si hoy coincide con el título, lo sigue al
+        # cambiar el título, hasta que el usuario lo escriba a mano.
+        fila = len(self.CAMPOS)
+        ctk.CTkLabel(der, text="Archivo", font=app.f_neg, anchor="w").grid(
+            row=fila, column=0, sticky="w", padx=(0, 12), pady=(14, 5))
+        caja = ctk.CTkFrame(der, fg_color="transparent")
+        caja.grid(row=fila, column=1, sticky="ew", pady=(14, 5))
+        caja.grid_columnconfigure(0, weight=1)
+        self.extension = Path(ruta).suffix
+        self.var_archivo = tk.StringVar(value=limpiar_tk(Path(ruta).stem))
+        self.e_archivo = ctk.CTkEntry(caja, textvariable=self.var_archivo, height=34, corner_radius=10,
+                                      font=app.f_norm, fg_color=C["input"], border_color=C["borde"],
+                                      text_color=C["texto"])
+        self.e_archivo.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(caja, text=self.extension, font=app.f_norm, text_color=C["suave"]).grid(
+            row=0, column=1, padx=(6, 0))
+        self.l_nombre = ctk.CTkLabel(der, text="", font=app.f_peq, text_color=C["suave"], anchor="w",
+                                     justify="left", wraplength=330)
+        self.l_nombre.grid(row=fila + 1, column=1, sticky="w")
+        self.sigue_titulo = Path(ruta).stem == nombre_archivo_valido(actuales.get("titulo", ""))
+        self.e_archivo._entry.bind("<Key>", lambda e: setattr(self, "sigue_titulo", False), add=True)
+        self.vars["titulo"].trace_add("write", self._titulo_cambio)
+        self.var_archivo.trace_add("write", lambda *a: self._mostrar_nombre_final())
+        self._mostrar_nombre_final()
+
         pie = ctk.CTkFrame(self, fg_color="transparent")
         pie.pack(fill="x", padx=18, pady=12)
         app._boton(pie, "Guardar", self._guardar, acento=True, width=120, height=36).pack(side="right")
@@ -645,6 +722,22 @@ class VentanaEtiquetas(ctk.CTkToplevel):
         self.bind("<Return>", lambda e: self._guardar())
         self.bind("<Escape>", lambda e: self.destroy())
         self.after(150, self.focus)
+
+    def _titulo_cambio(self, *_):
+        if self.sigue_titulo:
+            self.var_archivo.set(nombre_archivo_valido(self.vars["titulo"].get()))
+
+    def _mostrar_nombre_final(self):
+        """Avisa si el nombre se va a guardar distinto (caracteres no permitidos) o si queda vacío."""
+        escrito = self.var_archivo.get().strip()
+        final = nombre_archivo_valido(escrito, self.extension)
+        if not final:
+            texto = "El nombre no puede quedar vacío."
+        elif final != escrito:
+            texto = f"Se guardará como: {corto(final + self.extension, 60)}"
+        else:
+            texto = ""
+        self.l_nombre.configure(text=texto, text_color=C["rojo"] if not final else C["suave"])
 
     def _mostrar_portada(self, datos: bytes):
         try:
@@ -670,12 +763,28 @@ class VentanaEtiquetas(ctk.CTkToplevel):
 
     def _guardar(self):
         datos = {k: v.get().strip() for k, v in self.vars.items()}
+        nombre = nombre_archivo_valido(self.var_archivo.get(), self.extension)
+        if not nombre:
+            messagebox.showerror("Nombre no válido", "El nombre del archivo no puede quedar vacío.", parent=self)
+            return
         try:
             escribir_etiquetas(self.ruta, datos, self.portada_nueva)
         except Exception as e:
             messagebox.showerror("No se pudieron guardar las etiquetas", str(e), parent=self)
             return
-        self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva)
+        # Primero las etiquetas, luego el nombre: si renombrar falla, lo demás ya quedó guardado
+        try:
+            nueva = renombrar_archivo(self.ruta, nombre)
+        except (OSError, ValueError) as e:
+            self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva)
+            self.portada_nueva = None
+            detalle = str(e) if isinstance(e, (FileExistsError, ValueError)) else (
+                f"{e}\n\n¿Está abierto en un reproductor? Ciérralo e inténtalo de nuevo.")
+            messagebox.showerror("No se pudo cambiar el nombre",
+                                 f"Las etiquetas sí se guardaron, pero el archivo no se renombró.\n\n{detalle}",
+                                 parent=self)
+            return
+        self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva, str(nueva))
         self.destroy()
 
 
@@ -726,6 +835,7 @@ class App(ctk.CTk, *_BASES_DND):
         self._visibles = set()        # ids que pasan el filtro actual
         self._vista_programada = False
         self.ventana_resultados = None
+        self.ventana_exportar = None
         self.lote = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
         self._avisado_segundo_plano = False
         self.bandeja = Bandeja(self._imagen_bandeja(),
@@ -1863,11 +1973,13 @@ class App(ctk.CTk, *_BASES_DND):
 
     # ---------------------------------------------------------------- exportar
     def _menu_exportar(self):
-        menu = self._nuevo_menu()
-        menu.add_command(label="Lista de reproducción (.m3u) de las descargadas", command=self._exportar_m3u)
-        menu.add_command(label="Tabla (.csv) de la lista", command=self._exportar_csv)
-        b = self.btn_exportar
-        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+        """Botón Exportar: ventanita con las dos opciones. (Antes era un menú emergente de
+        Windows, que en algunos equipos no llegaba a aparecer.)"""
+        if self.ventana_exportar is not None and self.ventana_exportar.winfo_exists():
+            self.ventana_exportar.lift()
+            self.ventana_exportar.focus()
+            return
+        self.ventana_exportar = VentanaExportar(self)
 
     def _exportar_m3u(self):
         canciones = [self.filas[v] for v in self._filas_en_vista()
@@ -1887,7 +1999,7 @@ class App(ctk.CTk, *_BASES_DND):
         except OSError as e:
             messagebox.showerror("No se pudo exportar", str(e))
             return
-        messagebox.showinfo("Exportar", f"Lista guardada con {n} canciones:\n{ruta}")
+        messagebox.showinfo("Exportar", f"Lista guardada con {n} {'canción' if n == 1 else 'canciones'}:\n{ruta}")
 
     def _exportar_csv(self):
         orden = self._filas_en_vista()
@@ -2165,12 +2277,12 @@ class App(ctk.CTk, *_BASES_DND):
         except Exception as e:
             messagebox.showerror("No se pudo leer el archivo", str(e))
 
-    def _etiquetas_guardadas(self, vid, datos, portada):
+    def _etiquetas_guardadas(self, vid, datos, portada, ruta=None):
         f = self.filas.get(vid)
         if not f:
             return
         f.update(datos=None, datos_pedidos=False)  # el tamaño del archivo cambia
-        self._fila(vid, **datos)
+        self._fila(vid, **datos, **({"ruta": ruta} if ruta else {}))
         if portada:
             self._poner_imagen(vid, portada)
 

@@ -179,3 +179,49 @@ def test_formato_no_editable(tmp_path):
     (tmp_path / "a.webm").write_bytes(b"x")
     with pytest.raises(Exception):
         m.escribir_etiquetas(tmp_path / "a.webm", {"titulo": "x"})
+
+
+# ------------------------------------------------------------------ renombrar el archivo
+@pytest.mark.parametrize("texto, esperado", [
+    ("Canción nueva", "Canción nueva"),
+    ("  Canción nueva.mp3 ", "Canción nueva"),       # se quita la extensión si la escribe
+    ("Canción nueva.MP3", "Canción nueva"),
+    ("AC/DC: Back?", "AC⧸DC： Back？"),              # caracteres prohibidos en Windows
+    ("Termina en punto.", "Termina en punto"),        # Windows no admite nombres con punto final
+    ("   ", ""),
+])
+def test_nombre_archivo_valido(texto, esperado):
+    assert m.nombre_archivo_valido(texto, ".mp3") == esperado
+
+
+def test_renombrar_archivo(tmp_path):
+    original = tmp_path / "viejo.mp3"
+    original.write_bytes(b"audio")
+    nueva = m.renombrar_archivo(original, "Nuevo nombre.mp3")
+    assert nueva == tmp_path / "Nuevo nombre.mp3" and nueva.read_bytes() == b"audio"
+    assert not original.exists()
+    assert m.renombrar_archivo(nueva, "Nuevo nombre") == nueva  # mismo nombre: no hace nada
+
+
+def test_renombrar_no_sobrescribe(tmp_path):
+    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    with pytest.raises(FileExistsError):
+        m.renombrar_archivo(a, "b")
+    assert a.read_bytes() == b"A" and b.read_bytes() == b"B"
+
+
+def test_renombrar_solo_mayusculas(tmp_path):
+    a = tmp_path / "cancion.mp3"
+    a.write_bytes(b"x")
+    nueva = m.renombrar_archivo(a, "Cancion")
+    assert nueva.name == "Cancion.mp3" and [p.name for p in tmp_path.iterdir()] == ["Cancion.mp3"]
+
+
+def test_renombrar_vacio(tmp_path):
+    a = tmp_path / "a.mp3"
+    a.write_bytes(b"x")
+    with pytest.raises(ValueError):
+        m.renombrar_archivo(a, "  .mp3 ")
+    assert a.exists()
