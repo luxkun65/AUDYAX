@@ -1,4 +1,4 @@
-"""Pruebas de búsqueda, actualización de yt-dlp, detección de enlaces y editor de etiquetas."""
+"""Tests for search, yt-dlp updates, link detection and the tag editor."""
 import subprocess
 from io import BytesIO
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ import engine as m
 from test_engine import make_audio, needs_ffmpeg, needs_mutagen
 
 
-# ------------------------------------------------------------------ enlaces
+# ------------------------------------------------------------------ links
 @pytest.mark.parametrize("text", [
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "https://music.youtube.com/watch?v=abc&list=xyz",
@@ -39,7 +39,7 @@ def test_extract_links_from_drop():
     assert m.extract_links("") == []
 
 
-# ------------------------------------------------------------------ búsqueda
+# ------------------------------------------------------------------ search
 def test_duration_text():
     assert m._duration_text(65) == "1:05"
     assert m._duration_text(3725) == "1:02:05"
@@ -64,7 +64,7 @@ def test_search_builds_results(monkeypatch):
             return {"entries": [
                 {"id": "abc", "title": "One More Time", "channel": "Daft Punk - Topic",
                  "duration": 320, "url": "https://www.youtube.com/watch?v=abc", "ie_key": "Youtube"},
-                {"id": "song_list", "title": "Un canal", "ie_key": "YoutubeTab"},  # no es una canción
+                {"id": "channel", "title": "Un canal", "ie_key": "YoutubeTab"},  # not a song
                 None,
             ]}
 
@@ -126,7 +126,7 @@ def test_update_without_python(monkeypatch):
     assert m.update_ytdlp()[0] is False
 
 
-# ------------------------------------------------------------------ editor de etiquetas
+# ------------------------------------------------------------------ tag editor
 def _jpeg(color="red", side_px=64) -> bytes:
     from PIL import Image
     output = BytesIO()
@@ -153,15 +153,15 @@ def test_write_and_read_tags(tmp_path, ext):
     assert m.read_tags(path) == data
     assert m.read_cover(path) == cover
 
-    # Un campo vacío borra la etiqueta; la portada se conserva si no se pasa otra
+    # An empty field removes the tag; the cover is kept if no other one is given
     m.write_tags(path, dict(data, genre="", title="Otro"))
     assert m.read_tags(path) == dict(data, genre="", title="Otro")
     assert m.read_cover(path) == cover
 
-    # Reemplazar la portada deja solo la nueva
-    new_item = _jpeg("blue")
-    m.write_tags(path, {}, new_item)
-    assert m.read_cover(path) == new_item
+    # Replacing the cover leaves only the new one
+    new_cover = _jpeg("blue")
+    m.write_tags(path, {}, new_cover)
+    assert m.read_cover(path) == new_cover
 
 
 @needs_ffmpeg
@@ -181,13 +181,13 @@ def test_non_editable_format(tmp_path):
         m.write_tags(tmp_path / "a.webm", {"title": "x"})
 
 
-# ------------------------------------------------------------------ renombrar el archivo
+# ------------------------------------------------------------------ renaming the file
 @pytest.mark.parametrize("text, expected", [
     ("Canción nueva", "Canción nueva"),
-    ("  Canción nueva.mp3 ", "Canción nueva"),       # se quita la extensión si la escribe
+    ("  Canción nueva.mp3 ", "Canción nueva"),       # the extension is removed if typed
     ("Canción nueva.MP3", "Canción nueva"),
-    ("AC/DC: Back?", "AC⧸DC： Back？"),              # caracteres prohibidos en Windows
-    ("Termina en punto.", "Termina en punto"),        # Windows no admite nombres con punto final
+    ("AC/DC: Back?", "AC⧸DC： Back？"),              # characters forbidden on Windows
+    ("Termina en punto.", "Termina en punto"),        # Windows doesn't allow names ending in a dot
     ("   ", ""),
 ])
 def test_valid_filename(text, expected):
@@ -197,10 +197,10 @@ def test_valid_filename(text, expected):
 def test_rename_file(tmp_path):
     original = tmp_path / "viejo.mp3"
     original.write_bytes(b"audio")
-    new_item = m.rename_file(original, "Nuevo nombre.mp3")
-    assert new_item == tmp_path / "Nuevo nombre.mp3" and new_item.read_bytes() == b"audio"
+    new_path = m.rename_file(original, "Nuevo nombre.mp3")
+    assert new_path == tmp_path / "Nuevo nombre.mp3" and new_path.read_bytes() == b"audio"
     assert not original.exists()
-    assert m.rename_file(new_item, "Nuevo nombre") == new_item  # mismo nombre: no hace nada
+    assert m.rename_file(new_path, "Nuevo nombre") == new_path  # same name: does nothing
 
 
 def test_rename_does_not_overwrite(tmp_path):
@@ -215,8 +215,8 @@ def test_rename_does_not_overwrite(tmp_path):
 def test_rename_case_only(tmp_path):
     a = tmp_path / "cancion.mp3"
     a.write_bytes(b"x")
-    new_item = m.rename_file(a, "Cancion")
-    assert new_item.name == "Cancion.mp3" and [p.name for p in tmp_path.iterdir()] == ["Cancion.mp3"]
+    new_path = m.rename_file(a, "Cancion")
+    assert new_path.name == "Cancion.mp3" and [p.name for p in tmp_path.iterdir()] == ["Cancion.mp3"]
 
 
 def test_rename_empty(tmp_path):

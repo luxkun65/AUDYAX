@@ -1,9 +1,9 @@
 """
-Revisa el resultado de `AUDYAX --prueba-arranque resultado.json` (lo usa GitHub Actions).
+Checks the result of `AUDYAX --self-test result.json` (used by GitHub Actions).
 
-    python tools/verificar_arranque.py resultado.json [--ffmpeg-incluido]
+    python tools/check_startup.py result.json [--bundled-ffmpeg]
 
-Falla (código 1) si falta algo imprescindible.
+Fails (exit code 1) if something essential is missing.
 """
 import json
 import sys
@@ -18,7 +18,7 @@ def main():
                   "tray", "drag_and_drop", "audio_library"):
         if not data.get(key):
             errors.append(f"{key} = {data.get(key)!r}")
-    if "--ffmpeg-incluido" in sys.argv:
+    if "--bundled-ffmpeg" in sys.argv:
         for key in ("ffmpeg", "ffprobe"):
             path = str(data.get(key) or "")
             if "AUDYAX" not in path or "ffmpeg" not in path.lower():

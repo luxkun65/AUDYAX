@@ -1,5 +1,5 @@
-"""Motor del mini reproductor (con una salida de audio simulada: los servidores de pruebas
-no tienen tarjeta de sonido)."""
+"""Mini player engine (with a simulated audio output: test servers
+have no sound card)."""
 import sys
 import threading
 import time
@@ -10,11 +10,11 @@ import player as r
 from test_engine import make_audio, needs_ffmpeg
 
 np = pytest.importorskip("numpy")
-SPEEDUP = 8  # la salida falsa "escucha" 8 veces más rápido que unos parlantes
+SPEEDUP = 8  # the fake output "listens" 8 times faster than real speakers
 
 
 class FakeOutput:
-    """Consume el audio al ritmo de unos parlantes (acelerado) y guarda lo que "suena"."""
+    """Consumes the audio at speaker pace (sped up) and keeps what "plays"."""
     instances = []
 
     def __init__(self, callback, on_finish):
@@ -41,17 +41,17 @@ class FakeOutput:
 
     def close(self):
         self.closed.set()
-        self.on_finish()  # como sounddevice: el aviso de "terminado" llega también al cerrar
+        self.on_finish()  # like sounddevice: the "finished" notice also arrives on close
 
 
 @pytest.fixture
 def engine():
     FakeOutput.instances.clear()
     end = threading.Event()
-    mo = r.AudioEngine(on_finish=end.set, output_factory=FakeOutput)
-    mo.end = end
-    yield mo
-    mo.stop()
+    eng = r.AudioEngine(on_finish=end.set, output_factory=FakeOutput)
+    eng.end = end
+    yield eng
+    eng.stop()
 
 
 def _amplitude(data: bytes) -> float:
@@ -68,7 +68,7 @@ def test_plays_to_the_end(engine, tmp_path, ext):
     assert engine.end.wait(10), "la canción no terminó"
     assert engine.status == "stopped"
     assert engine.position == pytest.approx(engine.duration, abs=0.15)
-    assert _amplitude(FakeOutput.instances[-1].played) > 200  # sonó algo (el silencio es 0)
+    assert _amplitude(FakeOutput.instances[-1].played) > 200  # something played (silence is 0)
 
 
 @needs_ffmpeg
@@ -79,7 +79,7 @@ def test_pause_and_resume(engine, tmp_path):
     assert engine.status == "paused"
     pos = engine.position
     time.sleep(0.3)
-    assert engine.position == pos  # en pausa no avanza
+    assert engine.position == pos  # doesn't advance while paused
     engine.resume()
     time.sleep(0.2)
     assert engine.position > pos and engine.status == "playing"
@@ -90,11 +90,11 @@ def test_pause_and_resume(engine, tmp_path):
 @needs_ffmpeg
 def test_seek(engine, tmp_path):
     engine.play(make_audio(tmp_path / "t.mp3", seconds=4))
-    engine.search(3.0)
+    engine.seek(3.0)
     assert engine.position >= 3.0
     assert engine.end.wait(5)
     assert engine.position == pytest.approx(engine.duration, abs=0.15)
-    # al adelantar se cierra la salida anterior, pero eso NO cuenta como "terminó la canción"
+    # seeking closes the previous output, but that does NOT count as "the song ended"
     assert len(FakeOutput.instances) == 2
 
 
@@ -102,7 +102,7 @@ def test_seek(engine, tmp_path):
 def test_seek_while_paused_stays_paused(engine, tmp_path):
     engine.play(make_audio(tmp_path / "t.mp3", seconds=4))
     engine.pause_playback()
-    engine.search(2.0)
+    engine.seek(2.0)
     time.sleep(0.2)
     assert engine.status == "paused" and engine.position == pytest.approx(2.0, abs=0.01)
 
@@ -130,7 +130,7 @@ def test_stop_does_not_count_as_end(engine, tmp_path):
     process = engine._process
     engine.stop()
     assert engine.status == "stopped" and not engine.end.is_set()
-    assert process.poll() is not None  # FFmpeg cerrado
+    assert process.poll() is not None  # FFmpeg closed
 
 
 def test_format_time():
@@ -145,7 +145,7 @@ def test_audio_available_returns_reason():
 
 
 def test_audio_available_when_portaudio_fails(monkeypatch):
-    """En Linux sin servidor de sonido, importar sounddevice lanza PortAudioError (no OSError)."""
+    """On Linux without a sound server, importing sounddevice raises PortAudioError (not OSError)."""
     import builtins
     original = builtins.__import__
 

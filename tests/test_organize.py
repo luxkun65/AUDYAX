@@ -1,4 +1,4 @@
-"""Organizar descargas en carpetas (Artista / Álbum)."""
+"""Organizing downloads into folders (Artist / Album)."""
 import functools
 import http.server
 import threading
@@ -15,7 +15,7 @@ class _NeverCancelled:
         return False
 
 
-# ------------------------------------------------------------------ plantilla y modo
+# ------------------------------------------------------------------ template and mode
 def test_does_not_organize_by_default():
     assert m.DEFAULT_CONFIG["organize"] == "flat"
     assert m.DEFAULT_CONFIG["playlists_in_folder"] is True
@@ -35,7 +35,7 @@ def test_output_template(tmp_path):
     ({"organize": "artist_album"}, False, "artist_album"),
     ({"organize": "artist_album", "playlists_in_folder": True}, True, "flat"),
     ({"organize": "artist_album", "playlists_in_folder": False}, True, "artist_album"),
-    ({"organize": "artist", "subfolder": "Mi Playlist"}, False, "flat"),  # reintento
+    ({"organize": "artist", "subfolder": "Mi Playlist"}, False, "flat"),  # retry
     ({"organize": "cualquier cosa"}, False, "flat"),
     ({}, False, "flat"),
 ])
@@ -50,12 +50,12 @@ def test_yt_dlp_builds_path_and_escapes_slashes(tmp_path):
     with YoutubeDL({"outtmpl": {"default": m.output_template(tmp_path, "artist_album")},
                     "quiet": True}) as ydl:
         path = Path(ydl.prepare_filename(info))
-    assert path.parent.parent.parent == tmp_path  # exactamente dos carpetas, no tres
+    assert path.parent.parent.parent == tmp_path  # exactly two folders, not three
     assert path.parent.name == "Back in Black" and path.name == "Hells Bells.mp3"
 
 
 def test_clean_metadata_checks_clashes_in_organized_folder(tmp_path):
-    (tmp_path / "Intro.mp3").touch()                       # otro "Intro" suelto en la raíz
+    (tmp_path / "Intro.mp3").touch()                       # another loose "Intro" in the root
     (tmp_path / "Artista B" / "Disco").mkdir(parents=True)
     (tmp_path / "Artista B" / "Disco" / "Intro.mp3").touch()
     pp = m.CleanMetadata(None, tmp_path, lambda e: None, _NeverCancelled(), organize="artist_album")
@@ -67,10 +67,10 @@ def test_clean_metadata_checks_clashes_in_organized_folder(tmp_path):
     assert info["safe_filename"] == "Intro (Artista B)"
 
 
-# ------------------------------------------------------------------ de punta a punta
+# ------------------------------------------------------------------ end to end
 @pytest.fixture
 def server(tmp_path_factory, monkeypatch):
-    """Sirve un audio por HTTP local para que yt-dlp lo 'descargue' sin internet."""
+    """Serves an audio file over local HTTP so yt-dlp can 'download' it without internet."""
     root = tmp_path_factory.mktemp("srv")
     make_audio(root / "cancion.m4a", seconds=2)
     request_handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))

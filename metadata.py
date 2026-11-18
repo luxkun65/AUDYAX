@@ -1,14 +1,14 @@
 """
-Mejores metadatos y portadas con MusicBrainz (https://musicbrainz.org) y Cover Art Archive
-(https://coverartarchive.org), para cuando YouTube trae datos pobres: un videoclip sin
-álbum, o un año que en realidad es la fecha en que se subió el video.
+Better metadata and covers from MusicBrainz (https://musicbrainz.org) and Cover Art Archive
+(https://coverartarchive.org), for when YouTube provides poor data: a music video with no
+album, or a year that is really the date the video was uploaded.
 
-Reglas de MusicBrainz que se respetan:
-  - User-Agent que identifica la aplicación y cómo contactarla;
-  - como mucho 1 petición por segundo (aunque haya varias descargas a la vez).
+MusicBrainz rules that are respected:
+  - a User-Agent that identifies the application and how to contact it;
+  - at most 1 request per second (even with several downloads at once).
 
-Es conservador a propósito: solo acepta una coincidencia si el título y el artista
-coinciden y la duración se parece. Es mejor no completar un dato que completarlo mal.
+It is conservative on purpose: it only accepts a match if the title and the artist
+match and the duration is similar. Better to leave a field empty than to fill it wrong.
 """
 import json
 import re
@@ -24,17 +24,17 @@ from services import CircuitBreaker, ServiceUnavailable
 MB_URL = "https://musicbrainz.org/ws/2"
 CAA_URL = "https://coverartarchive.org"
 USER_AGENT = "AUDYAX/1.0 ( https://github.com/luxkun65/AUDYAX )"
-MIN_SCORE = 85          # MusicBrainz da un "score" de 0 a 100 a cada resultado
-TOLERANCE_SECONDS = 10     # diferencia de duración aceptada entre el video y la grabación
+MIN_SCORE = 85          # MusicBrainz gives each result a "score" from 0 to 100
+TOLERANCE_SECONDS = 10     # accepted duration difference between the video and the recording
 
 _lock = threading.Lock()
 _last_request = [0.0]
 _cache = {}
-breaker = CircuitBreaker()  # si MusicBrainz falla varias veces seguidas, se deja un rato
+breaker = CircuitBreaker()  # if MusicBrainz fails several times in a row, it is left alone for a while
 
 
 # ==============================================================================
-# PETICIONES (con el límite de 1 por segundo)
+# REQUESTS (with the limit of 1 per second)
 # ==============================================================================
 def _request_mb(path: str, query_params: dict, timeout: int = 15, proxy: str = ""):
     query_params = dict(query_params, fmt="json")
@@ -44,7 +44,7 @@ def _request_mb(path: str, query_params: dict, timeout: int = 15, proxy: str = "
         *([urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy.startswith("http") else []))
     if not breaker.available():
         raise ServiceUnavailable("MusicBrainz no respondió hace poco; se reintentará más tarde")
-    with _lock:  # una petición a la vez, separadas al menos 1,1 s
+    with _lock:  # one request at a time, at least 1.1 s apart
         wait_time = _last_request[0] + 1.1 - time.monotonic()
         if wait_time > 0:
             time.sleep(wait_time)
@@ -61,7 +61,7 @@ def _request_mb(path: str, query_params: dict, timeout: int = 15, proxy: str = "
 
 
 # ==============================================================================
-# COMPARAR TEXTOS
+# TEXT COMPARISON
 # ==============================================================================
 _NOISE = re.compile(
     r"[\(\[][^\)\]]*(official|oficial|video|vídeo|audio|lyric|letra|visualizer|hd|4k|remaster|"
@@ -69,7 +69,7 @@ _NOISE = re.compile(
 
 
 def normalize(text: str) -> str:
-    """Para comparar: sin tildes, en minúsculas, sin "(Official Video)", "feat. …" ni signos."""
+    """For comparing: no accents, lowercase, no "(Official Video)", "feat. …" or punctuation."""
     text = _NOISE.sub(" ", text or "")
     text = re.split(r"\s+(?:feat\.?|ft\.?|featuring|con)\s+", text, flags=re.IGNORECASE)[0]
     text = unicodedata.normalize("NFKD", text)
@@ -79,8 +79,8 @@ def normalize(text: str) -> str:
 
 
 def _same_name(a: str, b: str) -> bool:
-    """Iguales, o todas las palabras del más corto están (completas) en el otro:
-    "One More Time" ~ "One More Time - Radio Edit", pero "Queen" no ~ "Queens of the Stone Age"."""
+    """Equal, or every word of the shorter one appears (whole) in the other:
+    "One More Time" ~ "One More Time - Radio Edit", but "Queen" !~ "Queens of the Stone Age"."""
     a, b = normalize(a), normalize(b)
     if not a or not b:
         return False
@@ -96,11 +96,11 @@ def _credited_artist(recording: dict) -> str:
 
 
 # ==============================================================================
-# ELEGIR LA MEJOR COINCIDENCIA
+# CHOOSING THE BEST MATCH
 # ==============================================================================
 def _release_rank(rel: dict) -> tuple:
-    """Para elegir el álbum: oficial, álbum de estudio, sin "recopilatorio" ni "en vivo",
-    y el más antiguo (la edición original)."""
+    """For choosing the album: official, studio album, no "compilation" or "live",
+    and the oldest one (the original edition)."""
     group = rel.get("release-group") or {}
     secondary = group.get("secondary-types") or []
     kind = group.get("primary-type") or ""
@@ -111,7 +111,7 @@ def _release_rank(rel: dict) -> tuple:
 
 
 def choose(recordings: list, title: str, artist: str, duration=None):
-    """Elige la grabación y el lanzamiento (álbum) que corresponden, o None."""
+    """Chooses the matching recording and release (album), or None."""
     for g in sorted(recordings, key=lambda g: -int(g.get("score") or 0)):
         if int(g.get("score") or 0) < MIN_SCORE:
             continue
@@ -132,14 +132,14 @@ def choose(recordings: list, title: str, artist: str, duration=None):
 
 
 def _escape(text: str) -> str:
-    """Escapa los caracteres especiales de la búsqueda de MusicBrainz (sintaxis Lucene)."""
+    """Escapes the special characters of a MusicBrainz query (Lucene syntax)."""
     return re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", text)
 
 
 def search(title: str, artist: str, duration=None, proxy: str = ""):
-    """Busca la canción en MusicBrainz. Devuelve {'album', 'anio', 'release_id',
-    'release_group_id', 'grabacion_id'} o None si no hay una coincidencia confiable.
-    Lanza la excepción si falla la conexión."""
+    """Looks the song up on MusicBrainz. Returns {'album', 'year', 'release_id',
+    'release_group_id', 'recording_id'} or None if there is no reliable match.
+    Raises the exception if the connection fails."""
     clean_title = _NOISE.sub(" ", title or "").strip()
     if not clean_title or not (artist or "").strip():
         return None
@@ -154,12 +154,12 @@ def search(title: str, artist: str, duration=None, proxy: str = ""):
 
 
 # ==============================================================================
-# PORTADAS (Cover Art Archive)
+# COVERS (Cover Art Archive)
 # ==============================================================================
 def cover_urls(match: dict, file_size: int = 1200) -> list:
-    """Direcciones de la portada, de la más específica a la más general: la del lanzamiento
-    elegido y la del "grupo" (que Cover Art Archive resuelve a la mejor edición con portada).
-    Si no existen, Cover Art Archive responde 404 y se usa la siguiente opción."""
+    """Cover URLs, from the most specific to the most general: the chosen release's
+    and the "group's" (which Cover Art Archive resolves to the best edition with a cover).
+    If they don't exist, Cover Art Archive answers 404 and the next option is used."""
     urls = []
     if match and match.get("release_group_id"):
         urls.append(f"{CAA_URL}/release-group/{match['release_group_id']}/front-{file_size}")
@@ -169,6 +169,6 @@ def cover_urls(match: dict, file_size: int = 1200) -> list:
 
 
 def poor_data(info: dict) -> bool:
-    """¿Vale la pena consultar MusicBrainz? Sí, si YouTube no trajo álbum o año de lanzamiento
-    (en un videoclip, el "año" suele ser solo la fecha en que se subió el video)."""
+    """Is it worth asking MusicBrainz? Yes, if YouTube didn't provide an album or release year
+    (for a music video, the "year" is usually just the date the video was uploaded)."""
     return not info.get("album") or not (info.get("release_year") or info.get("release_date"))

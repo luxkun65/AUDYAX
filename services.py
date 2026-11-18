@@ -1,16 +1,16 @@
 """
-Pequeña protección compartida por las consultas a servicios externos (MusicBrainz, LRCLIB).
+Small protection shared by the requests to external services (MusicBrainz, LRCLIB).
 
-Si un servicio está caído o muy lento, cada canción tendría que esperar su propio tiempo
-límite. Tras varios fallos de conexión seguidos, se deja de consultarlo un rato y las
-descargas siguen sin esos datos extra (que son un "plus", no algo imprescindible).
+If a service is down or very slow, every song would have to wait for its own
+timeout. After several connection failures in a row, it isn't queried for a while and
+downloads continue without that extra data (a "bonus", not something essential).
 """
 import threading
 import time
 
 
 class CircuitBreaker:
-    """Corta las consultas a un servicio tras `fallos_max` fallos seguidos, durante `pausa` s."""
+    """Stops querying a service after `max_failures` failures in a row, for `pause` seconds."""
 
     def __init__(self, max_failures: int = 3, pause: float = 300):
         self.max_failures, self.pause = max_failures, pause
@@ -34,4 +34,4 @@ class CircuitBreaker:
 
 
 class ServiceUnavailable(RuntimeError):
-    """Se lanza en lugar de consultar mientras el interruptor está cortado."""
+    """Raised instead of querying while the breaker is tripped."""

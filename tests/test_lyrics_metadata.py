@@ -1,4 +1,4 @@
-"""Letras (LRCLIB) y metadatos/portadas (MusicBrainz + Cover Art Archive)."""
+"""Lyrics (LRCLIB) and metadata/covers (MusicBrainz + Cover Art Archive)."""
 import functools
 import http.server
 import io
@@ -11,7 +11,7 @@ import pytest
 import lyrics
 import metadata
 import engine as m
-# Se importan aquí (antes de que conftest las reemplace) para probar las funciones reales
+# Imported here (before conftest replaces them) to test the real functions
 from lyrics import find_lyrics as real_find_lyrics
 from metadata import search as real_mb_search
 from test_engine import make_audio, needs_ffmpeg, needs_mutagen
@@ -20,7 +20,7 @@ LRC = "[ar:Daft Punk]\n[00:01.50] Primera\n[00:03.00][00:10.25] Estribillo\n[00:
 
 
 # ==============================================================================
-# LETRAS
+# LYRICS
 # ==============================================================================
 def test_parse_lrc():
     assert lyrics.parse_lrc(LRC) == [(1.5, "Primera"), (3.0, "Estribillo"), (5.5, "Otra"),
@@ -57,14 +57,14 @@ def test_find_lyrics_exact(monkeypatch):
 
 def test_find_lyrics_by_search(monkeypatch):
     results = [
-        {"id": 1, "duration": 200, "plainLyrics": "otra versión", "syncedLyrics": "[00:01] x"},  # duración lejana
+        {"id": 1, "duration": 200, "plainLyrics": "otra versión", "syncedLyrics": "[00:01] x"},  # duration too far off
         {"id": 2, "duration": 321, "plainLyrics": "sin sincronizar", "syncedLyrics": None},
         {"id": 3, "duration": 319, "plainLyrics": "text", "syncedLyrics": "[00:01.00] sincronizada"},
-        {"id": 4, "duration": 320, "plainLyrics": None, "syncedLyrics": None},  # sin letra
+        {"id": 4, "duration": 320, "plainLyrics": None, "syncedLyrics": None},  # no lyrics
     ]
     _fake_lrclib(monkeypatch, get=None, search=results)
     r = real_find_lyrics("One More Time", "Daft Punk", "", 320)
-    assert r["id"] == 3  # la de duración parecida que además está sincronizada
+    assert r["id"] == 3  # the one with a close duration that is also synced
     _fake_lrclib(monkeypatch, get=None, search=[])
     assert real_find_lyrics("x", "y", "", 100) is None
     assert real_find_lyrics("", "y") is None
@@ -81,7 +81,7 @@ def test_breaker_trips_after_failures(monkeypatch):
     for _ in range(2):
         with pytest.raises(urllib.error.URLError):
             lyrics._request("get", {"track_name": "x"})
-    with pytest.raises(ServiceUnavailable):  # ya no intenta conectarse
+    with pytest.raises(ServiceUnavailable):  # no longer tries to connect
         lyrics._request("get", {"track_name": "x"})
 
 
@@ -97,14 +97,14 @@ def test_save_and_read_lyrics(tmp_path, ext):
     assert lyrics.save_lyrics(path, lyric, "both") == ["lrc", "embedded"]
     assert lyrics.lrc_path(path).read_text(encoding="utf-8").strip() == lyric["synced"]
     assert lyrics.save_lyrics(path, lyric, "off") == []
-    # sin versión sincronizada se guarda el texto
+    # without a synced version, the plain text is saved
     lyrics.lrc_path(path).unlink()
     lyrics.save_lyrics(path, {"synced": None, "text": "Solo texto"}, "embedded")
     assert lyrics.read_lyrics(path) == "Solo texto"
 
 
 # ==============================================================================
-# METADATOS
+# METADATA
 # ==============================================================================
 def test_normalize_and_match():
     assert metadata.normalize("One More Time (Official Video)") == "one more time"
@@ -142,11 +142,11 @@ def test_choose_prefers_original_album():
 
 
 @pytest.mark.parametrize("changed, title, artist, duration", [
-    ({"score": 60}, "One More Time", "Daft Punk", 320),                       # puntaje bajo
-    ({}, "One More Time", "Otro Artista", 320),                                # otro artista
-    ({}, "Otra Canción", "Daft Punk", 320),                                    # otro título
-    ({}, "One More Time", "Daft Punk", 200),                                   # duración muy distinta
-    ({"releases": []}, "One More Time", "Daft Punk", 320),                     # sin lanzamientos
+    ({"score": 60}, "One More Time", "Daft Punk", 320),                       # low score
+    ({}, "One More Time", "Otro Artista", 320),                                # another artist
+    ({}, "Otra Canción", "Daft Punk", 320),                                    # another title
+    ({}, "One More Time", "Daft Punk", 200),                                   # very different duration
+    ({"releases": []}, "One More Time", "Daft Punk", 320),                     # no releases
 ])
 def test_choose_is_conservative(changed, title, artist, duration):
     assert metadata.choose([_recording(**changed)], title, artist, duration) is None
@@ -164,7 +164,7 @@ def test_mb_search_queries_and_caches(monkeypatch):
     assert r["album"] == "Discovery"
     assert queries == ['recording:"One More Time" AND artist:"Daft Punk"']
     real_mb_search("One More Time (Official Video)", "Daft Punk", 321)
-    assert len(queries) == 1  # segunda vez: de la caché
+    assert len(queries) == 1  # second time: from the cache
     assert real_mb_search("", "Daft Punk") is None
 
 
@@ -183,7 +183,7 @@ def test_cover_urls_and_poor_data():
 
 
 # ==============================================================================
-# DE PUNTA A PUNTA (descarga real desde un servidor local)
+# END TO END (real download from a local server)
 # ==============================================================================
 @pytest.fixture
 def server(tmp_path_factory, monkeypatch):
@@ -205,9 +205,9 @@ def _download(base, folder, **cfg_extra):
     events = []
     cfg = dict(m.DEFAULT_CONFIG, folder=str(folder), audio_format="mp3", replaygain=False, **cfg_extra)
     m.run_job(f"{base}/cancion.m4a", cfg, events.append, threading.Event())
-    done_ev = [e[2] for e in events if e[0] == "done"]
-    assert done_ev, events
-    return done_ev[0], events
+    done = [e[2] for e in events if e[0] == "done"]
+    assert done, events
+    return done[0], events
 
 
 @needs_ffmpeg
@@ -217,17 +217,17 @@ def test_musicbrainz_fills_album_year_and_cover(server, tmp_path, monkeypatch, f
     from PIL import Image
     monkeypatch.setattr(metadata, "search", lambda *a, **k: {
         "album": "Discovery", "year": "2001", "release_id": "r", "release_group_id": "g", "recording_id": "x"})
-    # La "portada del álbum" sale del servidor local; si la primera opción no existe (404),
-    # se usa la siguiente
+    # The "album cover" comes from the local server; if the first option doesn't exist (404),
+    # the next one is used
     urls = ([f"{server}/portada_album.jpg"] if first_exists
             else [f"{server}/no_existe.jpg", f"{server}/portada_album.jpg"])
     monkeypatch.setattr(metadata, "cover_urls", lambda found, file_size=1200: urls)
-    done_ev, events = _download(server, tmp_path, musicbrainz=True, caa_cover=True)
-    assert (done_ev["album"], done_ev["year"]) == ("Discovery", "2001")
-    assert done_ev.get("musicbrainz") is True
-    assert m.read_tags(done_ev["path"])["year"] == "2001"  # el año queda también EN el archivo
-    cover = Image.open(io.BytesIO(m.read_cover(done_ev["path"])))
-    assert cover.getpixel((150, 150))[0] > 150  # es la roja del "álbum"
+    done, events = _download(server, tmp_path, musicbrainz=True, caa_cover=True)
+    assert (done["album"], done["year"]) == ("Discovery", "2001")
+    assert done.get("musicbrainz") is True
+    assert m.read_tags(done["path"])["year"] == "2001"  # the year is also stored IN the file
+    cover = Image.open(io.BytesIO(m.read_cover(done["path"])))
+    assert cover.getpixel((150, 150))[0] > 150  # it's the red "album" one
     assert ("status", "cancion", "Buscando álbum en MusicBrainz…") in events
 
 
@@ -244,8 +244,8 @@ def test_musicbrainz_down_does_not_break_download(server, tmp_path, monkeypatch)
     def down(*a, **k):
         raise urllib.error.URLError("sin conexión")
     monkeypatch.setattr(metadata, "search", down)
-    done_ev, _ = _download(server, tmp_path, musicbrainz=True)
-    assert done_ev["path"] and Path(done_ev["path"]).exists()
+    done, _ = _download(server, tmp_path, musicbrainz=True)
+    assert done["path"] and Path(done["path"]).exists()
 
 
 @needs_ffmpeg
@@ -254,10 +254,10 @@ def test_download_with_lyrics(server, tmp_path, monkeypatch):
     requested = []
     monkeypatch.setattr(lyrics, "find_lyrics", lambda *a, **k: requested.append(a) or {
         "synced": "[00:00.50] Hola", "text": "Hola", "instrumental": False})
-    done_ev, events = _download(server, tmp_path, lyrics="both")
-    assert done_ev["lyrics"] == "synced"
-    assert lyrics.lrc_path(done_ev["path"]).exists()
-    assert lyrics.read_lyrics(done_ev["path"]) == "[00:00.50] Hola"
+    done, events = _download(server, tmp_path, lyrics="both")
+    assert done["lyrics"] == "synced"
+    assert lyrics.lrc_path(done["path"]).exists()
+    assert lyrics.read_lyrics(done["path"]) == "[00:00.50] Hola"
     assert ("status", "cancion", "Buscando letra…") in events
 
 
@@ -266,5 +266,5 @@ def test_lyrics_off_by_default(server, tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(lyrics, "find_lyrics", lambda *a, **k: called.append(1))
     assert m.DEFAULT_CONFIG["lyrics"] == "off"
-    done_ev, _ = _download(server, tmp_path)
-    assert not called and "lyrics" not in done_ev
+    done, _ = _download(server, tmp_path)
+    assert not called and "lyrics" not in done

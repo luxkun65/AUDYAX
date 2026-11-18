@@ -1,4 +1,4 @@
-"""Cola de descargas: pausa, descargas en paralelo y exportar la lista."""
+"""Download queue: pause, parallel downloads and exporting the list."""
 import csv
 import functools
 import http.server
@@ -12,7 +12,7 @@ import engine as m
 from test_engine import make_audio, needs_ffmpeg
 
 
-# ------------------------------------------------------------------ utilidades
+# ------------------------------------------------------------------ helpers
 def test_parallel_downloads_is_clamped():
     assert m.parallel_downloads({}) == 1
     assert m.parallel_downloads({"parallel_downloads": 2}) == 2
@@ -24,18 +24,18 @@ def test_parallel_downloads_is_clamped():
 
 def test_wait_if_paused():
     pause, cancel = threading.Event(), threading.Event()
-    m.wait_if_paused(pause, cancel)  # sin pausa: no espera
+    m.wait_if_paused(pause, cancel)  # not paused: doesn't wait
     m.wait_if_paused(None, None)
 
     pause.set()
     begin = time.monotonic()
     threading.Timer(0.5, pause.clear).start()
     m.wait_if_paused(pause, cancel)
-    assert time.monotonic() - begin >= 0.4  # esperó hasta reanudar
+    assert time.monotonic() - begin >= 0.4  # waited until resumed
 
     pause.set()
     threading.Timer(0.3, cancel.set).start()
-    with pytest.raises(m.DownloadCancelled):  # cancelar también despierta la espera
+    with pytest.raises(m.DownloadCancelled):  # cancelling also wakes up the wait
         m.wait_if_paused(pause, cancel)
 
 
@@ -78,7 +78,7 @@ def test_resolve_splits_playlists_into_songs(tmp_path, monkeypatch):
     assert not plan["per_song"] and plan["urls"] == ["https://youtu.be/v0"]
 
 
-# ------------------------------------------------------------------ exportar
+# ------------------------------------------------------------------ export
 def test_export_m3u(tmp_path):
     music = tmp_path / "Música"
     (music / "Daft Punk").mkdir(parents=True)
@@ -100,11 +100,11 @@ def test_export_csv(tmp_path):
              {"num": 2, "status": "Error", "title": "=HYPERLINK(\"x\")", "reason": "Video unavailable"}]
     dest = tmp_path / "lista.csv"
     assert m.export_csv(dest, rows) == 2
-    assert dest.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM: Excel reconoce las tildes
+    assert dest.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM: Excel recognizes accents
     read_rows = list(csv.reader(dest.open(encoding="utf-8-sig"), delimiter=";"))
     assert read_rows[0] == [t for _, t in m.CSV_COLUMNS]
     assert read_rows[1][:5] == ["1", "Descargada", "Canción ñ", "A; B", "Disco"]
-    assert read_rows[2][2].startswith("'=")  # no se convierte en fórmula
+    assert read_rows[2][2].startswith("'=")  # not turned into a formula
     assert read_rows[2][9] == "Video unavailable"
 
 
@@ -114,17 +114,17 @@ def test_duration_seconds(tmp_path):
     assert m.duration_seconds(tmp_path / "nada.mp3") == -1
 
 
-# ------------------------------------------------------------------ de punta a punta
+# ------------------------------------------------------------------ end to end
 @pytest.fixture
 def server(tmp_path_factory, monkeypatch):
-    """Sirve 4 audios por HTTP local, despacio, para poder pausar y medir la concurrencia."""
+    """Serves 4 audio files over local HTTP, slowly, to be able to pause and measure concurrency."""
     root = tmp_path_factory.mktemp("srv")
     for i in range(1, 5):
         make_audio(root / f"pista{i}.m4a", seconds=2)
 
     class Slow(http.server.SimpleHTTPRequestHandler):
         def copyfile(self, source, dest):
-            while True:  # ~0.6 s por archivo
+            while True:  # ~0.6 s per file
                 chunk = source.read(4096)
                 if not chunk:
                     break
@@ -185,12 +185,12 @@ def test_parallel_downloads(server, tmp_path, monkeypatch, n):
     assert done_songs == [f"Pista {i}.mp3" for i in range(1, 5)]
     assert status["peak"] == n
     assert not [e for e in events if e[0] == "error"]
-    assert [e for e in events if e[0] == "rg"]  # ReplayGain de álbum al final, como antes
+    assert [e for e in events if e[0] == "rg"]  # album ReplayGain at the end, as before
 
 
 @needs_ffmpeg
 def test_limit_shared_between_jobs(server, tmp_path, monkeypatch):
-    """Dos trabajos a la vez con un semáforo de 2 nunca pasan de 2 descargas en total."""
+    """Two jobs at once with a semaphore of 2 never go over 2 downloads in total."""
     monkeypatch.setattr(m, "resolve", _playlist_plan(server, 2))
     status = _count_concurrency(monkeypatch)
     limit = threading.BoundedSemaphore(2)
@@ -210,12 +210,12 @@ def test_limit_shared_between_jobs(server, tmp_path, monkeypatch):
 def test_pause_and_resume(server, tmp_path, monkeypatch):
     monkeypatch.setattr(m, "resolve", _playlist_plan(server, 2))
     pause, cancel, events = threading.Event(), threading.Event(), []
-    pause.set()  # empieza en pausa
+    pause.set()  # starts paused
     cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False)
     thread = threading.Thread(target=m.run_job, args=("x", cfg, events.append, cancel, pause))
     thread.start()
     time.sleep(2.5)
-    assert not [e for e in events if e[0] == "done"]  # en pausa no avanza
+    assert not [e for e in events if e[0] == "done"]  # doesn't advance while paused
     assert thread.is_alive()
     pause.clear()
     thread.join(60)
@@ -244,16 +244,16 @@ def test_cancel_during_pause(server, tmp_path, monkeypatch):
     assert not list(tmp_path.glob("**/*.mp3"))
 
 
-# ------------------------------------------------------------------ cancelar una sola canción
+# ------------------------------------------------------------------ cancelling a single song
 def test_wait_if_paused_single_cancel():
     pause, skip = threading.Event(), set()
-    m.wait_if_paused(None, None, "a", skip)  # no está en omitir: sigue
+    m.wait_if_paused(None, None, "a", skip)  # not in skip: continues
     skip.add("a")
     with pytest.raises(m.DownloadCancelled):
         m.wait_if_paused(None, None, "a", skip)
-    m.wait_if_paused(None, None, "b", skip)  # las demás siguen
+    m.wait_if_paused(None, None, "b", skip)  # the others continue
 
-    pause.set()  # en pausa, cancelar una canción la despierta (y solo a ella)
+    pause.set()  # while paused, cancelling a song wakes it up (and only it)
     skip2 = set()
     threading.Timer(0.3, lambda: skip2.add("x")).start()
     with pytest.raises(m.DownloadCancelled):
@@ -263,7 +263,7 @@ def test_wait_if_paused_single_cancel():
 @needs_ffmpeg
 @pytest.mark.parametrize("n", [1, 2])
 def test_cancel_individual_songs(server, tmp_path, monkeypatch, n):
-    """Se corta pista1 a mitad de descarga y pista3 antes de empezar; las demás terminan."""
+    """track1 is stopped mid-download and track3 before starting; the others finish."""
     monkeypatch.setattr(m, "resolve", _playlist_plan(server))
     skip, events = set(), []
 
@@ -273,13 +273,13 @@ def test_cancel_individual_songs(server, tmp_path, monkeypatch, n):
             skip.update({"pista1", "pista3"})
     cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False,
                parallel_downloads=n)
-    m.run_job("x", cfg, emit, threading.Event(), None, None, skip)  # no lanza
+    m.run_job("x", cfg, emit, threading.Event(), None, None, skip)  # doesn't raise
     done_songs = sorted(e[1] for e in events if e[0] == "done")
     assert done_songs == ["pista2", "pista4"]
     assert sorted(p.name for p in (tmp_path / "Lista").glob("*.mp3")) == ["Pista 2.mp3", "Pista 4.mp3"]
-    assert not [e for e in events if e[0] == "error"]  # cancelar no es un error
+    assert not [e for e in events if e[0] == "error"]  # cancelling is not an error
     file = (tmp_path / "descargados.txt").read_text(encoding="utf-8")
-    assert "pista1" not in file and "pista3" not in file  # se pueden reintentar
+    assert "pista1" not in file and "pista3" not in file  # they can be retried
 
 
 @needs_ffmpeg
@@ -301,11 +301,11 @@ def test_cancel_one_while_paused(server, tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_retry_keeps_youtube_music_data(server, tmp_path, monkeypatch):
-    """Al reintentar sola una canción de YouTube Music se usan sus datos, no los del video."""
+    """Retrying a single YouTube Music song uses its data, not the video's."""
     events = []
     cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False,
                extras={"pista3": {"title": "Canción Buena", "artist": "Artista", "album": "Disco"}})
     m.run_job(f"{server}/pista3.m4a", cfg, events.append, threading.Event())
-    done_ev = [e[2] for e in events if e[0] == "done"][0]
-    assert (done_ev["title"], done_ev["artist"], done_ev["album"]) == ("Canción Buena", "Artista", "Disco")
-    assert Path(done_ev["path"]).name == "Canción Buena.mp3"
+    done = [e[2] for e in events if e[0] == "done"][0]
+    assert (done["title"], done["artist"], done["album"]) == ("Canción Buena", "Artista", "Disco")
+    assert Path(done["path"]).name == "Canción Buena.mp3"

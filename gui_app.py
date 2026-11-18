@@ -1,15 +1,15 @@
 """
-AUDYAX - descargador de música de YouTube / YouTube Music (interfaz gráfica: customtkinter + Pillow).
+AUDYAX - music downloader for YouTube / YouTube Music (graphical interface: customtkinter + Pillow).
 
-Este archivo solo contiene la ventana. Todo el trabajo de descarga está en
-motor_descarga.py, que debe estar en la misma carpeta.
+This file only contains the window. All the download work is in
+engine.py, which must be in the same folder.
 
-Requisitos:
+Requirements:
     pip install -U yt-dlp mutagen customtkinter pillow tkinterdnd2
-    ffmpeg instalado y en el PATH
-    (tkinter viene con Python; en Linux: sudo apt install python3-tk)
+    ffmpeg installed and in the PATH
+    (tkinter comes with Python; on Linux: sudo apt install python3-tk)
 
-Uso:  python descargador_gui.py
+Usage:  python gui_app.py
 """
 import json
 import logging
@@ -77,7 +77,7 @@ from engine import (
     ytdlp_version,
 )
 
-# Arrastrar y soltar: opcional (pip install tkinterdnd2). Sin él la app funciona igual.
+# Drag and drop: optional (pip install tkinterdnd2). The app works the same without it.
 try:
     from tkinterdnd2 import DND_TEXT, TkinterDnD
     _DND_BASES = (TkinterDnD.DnDWrapper,)
@@ -85,7 +85,7 @@ except ImportError:
     DND_TEXT, TkinterDnD, _DND_BASES = None, None, ()
 
 # ==============================================================================
-# PALETA (cada color es una tupla: (modo claro, modo oscuro))
+# PALETTE (each color is a tuple: (light mode, dark mode))
 # ==============================================================================
 C = {
     "bg": ("#f4f1fa", "#0f0a1a"), "sidebar": ("#e9e3f5", "#0b0714"),
@@ -100,7 +100,7 @@ C = {
 }
 REPO_URL = "https://github.com/luxkun65/AUDYAX"
 
-# Opciones de "Organizar descargas" (Configuración): clave guardada -> texto y ejemplo
+# "Organize downloads" options (Settings): saved key -> text and example
 ORGANIZE_OPTIONS = {
     "flat": ("Todo junto (sin carpetas)", "Descargas/One More Time.mp3"),
     "artist": ("Una carpeta por artista", "Descargas/Daft Punk/One More Time.mp3"),
@@ -108,19 +108,19 @@ ORGANIZE_OPTIONS = {
 }
 STATUS_COLORS = {"green": "#2ecc71", "yellow": "#f1c40f", "red": "#e74c3c"}
 
-# Filtro por estado de la lista: texto del menú -> color de la fila (None = todas)
+# List status filter: menu text -> row color (None = all)
 STATUS_FILTERS = {"Todas": None, "Descargadas": "green", "En proceso": "yellow", "Con error": "red"}
-STATUS_ORDER = {"red": 0, "yellow": 1, "green": 2}  # al ordenar por estado, errores primero
+STATUS_ORDER = {"red": 0, "yellow": 1, "green": 2}  # when sorting by status, errors first
 
-# Ancho de cada columna de la lista (0 = ocupa el espacio sobrante)
+# Width of each list column (0 = takes the remaining space)
 COLUMN_WIDTHS = [34, 150, 52, 0, 170, 170, 60, 250]
 
 
 # ==============================================================================
-# UTILIDADES GRÁFICAS (Pillow)
+# GRAPHICS HELPERS (Pillow)
 # ==============================================================================
 def tk_safe(text) -> str:
-    """Tk antiguo no soporta algunos emojis; se reemplazan para evitar errores."""
+    """Old Tk doesn't support some emojis; they are replaced to avoid errors."""
     return "".join(c if ord(c) <= 0xFFFF else "□" for c in str(text))
 
 
@@ -130,7 +130,7 @@ def shorten(text, n: int) -> str:
 
 
 def _draw_icon(name: str, color: str, size: int) -> Image.Image:
-    """Dibuja un icono sencillo con líneas, a 4x de tamaño para que quede suave."""
+    """Draws a simple line icon, at 4x size so it comes out smooth."""
     S = 4
     n = size * S
     im = Image.new("RGBA", (n, n), (0, 0, 0, 0))
@@ -230,7 +230,7 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
 
 
 def icon(name: str, size: int = 18, color=None) -> ctk.CTkImage:
-    """Icono que cambia solo de color entre modo claro y oscuro."""
+    """Icon that switches color between light and dark mode by itself."""
     color = color or C["text"]
     if isinstance(color, str):
         color = (color, color)
@@ -239,7 +239,7 @@ def icon(name: str, size: int = 18, color=None) -> ctk.CTkImage:
 
 
 def rounded_thumbnail(img: Image.Image, side_px: int, radius: int) -> Image.Image:
-    """Recorta al centro en cuadrado y redondea las esquinas."""
+    """Crops the center into a square and rounds the corners."""
     S = 3
     img = img.convert("RGB")
     w, h = img.size
@@ -260,14 +260,14 @@ def square_image(img: Image.Image, side_px: int, radius: int) -> ctk.CTkImage:
 
 
 def empty_image(side_px: int) -> ctk.CTkImage:
-    """Cuadro gris que se muestra mientras llega la miniatura real."""
+    """Gray square shown while the real thumbnail arrives."""
     light = rounded_thumbnail(Image.new("RGB", (8, 8), "#d9cfee"), side_px * 2, 12)
     dark = rounded_thumbnail(Image.new("RGB", (8, 8), "#33264d"), side_px * 2, 12)
     return ctk.CTkImage(light_image=light, dark_image=dark, size=(side_px, side_px))
 
 
 def equalizer_image() -> ctk.CTkImage:
-    """Adorno de la barra lateral: bloques morados que se desvanecen hacia arriba."""
+    """Sidebar ornament: purple blocks that fade out upwards."""
     width, tall, S = 96, 100, 2
     im = Image.new("RGBA", (width * S, tall * S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
@@ -285,7 +285,7 @@ def equalizer_image() -> ctk.CTkImage:
 
 
 def cover_jpeg(img: Image.Image, square: bool, max_side: int = 1200) -> bytes:
-    """Convierte una imagen cualquiera en la portada JPEG que se incrusta en el archivo."""
+    """Turns any image into the JPEG cover embedded in the file."""
     img = img.convert("RGB")
     if square:
         w, h = img.size
@@ -298,18 +298,18 @@ def cover_jpeg(img: Image.Image, square: bool, max_side: int = 1200) -> bytes:
 
 
 def resource_path(name: str) -> Path:
-    """Archivo de la carpeta assets/, tanto ejecutando con Python como desde el .exe."""
+    """File in the assets/ folder, both when running with Python and from the .exe."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / "assets" / name
 
 
-# Atajos de teclado (también se muestran en "Acerca de")
+# Keyboard shortcuts (also shown in "About")
 SHORTCUTS = [("Ctrl+V", "Pegar un enlace copiado y descargarlo"),
           ("Supr", "Quitar de la lista las canciones seleccionadas (no borra archivos)"),
           ("Ctrl+F", "Buscar en la lista"),
           ("Enter", "Descargar o buscar lo escrito en el cuadro de enlace")]
 
-# Opciones del menú de cookies: texto -> valor guardado
+# Cookie menu options: text -> saved value
 COOKIE_SOURCES = {"Firefox (recomendado)": "firefox", "Archivo cookies.txt": "file"}
 COOKIE_SOURCES.update({n.capitalize(): n for n in COOKIE_BROWSERS if n != "firefox"})
 
@@ -341,9 +341,9 @@ def choose_font(root) -> str:
 
 
 def release_variable(var: tk.Variable):
-    """Libera ya, en el hilo principal, una variable de tkinter que se deja de usar.
-    Si no, Python la libera donde caiga su última referencia, a veces en un hilo de
-    descarga, y tkinter avisa en consola "main thread is not in main loop"."""
+    """Releases a tkinter variable that is no longer used, right now, on the main thread.
+    Otherwise Python frees it wherever its last reference drops, sometimes on a download
+    thread, and tkinter prints "main thread is not in main loop" to the console."""
     try:
         if var._tk is not None:
             var._tk.globalunsetvar(var._name)
@@ -352,7 +352,7 @@ def release_variable(var: tk.Variable):
             var._tclCommands = None
     except (tk.TclError, AttributeError):
         pass
-    var._tk = None  # así su __del__ ya no hace nada
+    var._tk = None  # so its __del__ no longer does anything
 
 
 def setup_columns(frame):
@@ -361,10 +361,10 @@ def setup_columns(frame):
 
 
 # ==============================================================================
-# FILA DE LA LISTA
+# LIST ROW
 # ==============================================================================
 class ListRow:
-    """Una canción en la lista: casilla, estado, miniatura y datos."""
+    """A song in the list: checkbox, status, thumbnail and data."""
 
     def __init__(self, app, parent, vid):
         self.app, self.vid = app, vid
@@ -399,13 +399,13 @@ class ListRow:
                   self.l_album, self.l_year, self.l_link):
             w.bind("<Button-1>", lambda e: app._select(vid), add=True)
             w.bind("<Double-Button-1>", lambda e: app._on_double_click(vid), add=True)
-            # Clic derecho (Button-2 en macOS): menú con las acciones de esa canción
+            # Right click (Button-2 on macOS): menu with that song's actions
             for button in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
                 if button:
                     w.bind(button, lambda e: app._row_menu(vid, e), add=True)
 
-        # Pasar el mouse por el estado de una canción en cola/descargándose lo convierte en
-        # "✕ Cancelar"; un clic ahí la cancela (sin tener que seleccionarla ni marcarla).
+        # Hovering the status of a queued/downloading song turns it into
+        # "✕ Cancel"; clicking there cancels it (without selecting or checking it).
         self._over_status = False
         self.l_status.bind("<Enter>", lambda e: self._hover_status(True), add=True)
         self.l_status.bind("<Leave>", lambda e: self._hover_status(False), add=True)
@@ -440,7 +440,7 @@ class ListRow:
     def refresh_row(self, f):
         self._paint_status(f)
         self._set("title", self.l_title, text=shorten(f["title"], 34))
-        # 19 caracteres caben en la columna; más largo la ensancha y desalinea la fila
+        # 19 characters fit in the column; longer text widens it and misaligns the row
         self._set("artist", self.l_artist, text=shorten(f["artist"] or "—", 19))
         self._set("album", self.l_album, text=shorten(f["album"] or "—", 19))
         self._set("year", self.l_year, text=f["year"] or "—")
@@ -449,7 +449,7 @@ class ListRow:
             self._set("thumb", self.l_thumb, image=f["img_s"])
 
     def paint(self, selected: bool):
-        pos = self.app.rows[self.vid].get("pos", 0)  # posición en la vista (filtrada/ordenada)
+        pos = self.app.rows[self.vid].get("pos", 0)  # position in the view (filtered/sorted)
         color = C["sel"] if selected else (C["row_a"] if pos % 2 == 0 else C["row_b"])
         if self._last.get("color") != color:
             self.frame.configure(fg_color=color)
@@ -460,13 +460,13 @@ class ListRow:
 
 
 # ==============================================================================
-# AVISO (franja dentro de la tarjeta de controles: enlace copiado, actualización…)
+# NOTICE (strip inside the controls card: copied link, update…)
 # ==============================================================================
 class Notice:
     def __init__(self, app, parent, row: int, ico: str):
         self.app, self.row = app, row
         self.frame = ctk.CTkFrame(parent, fg_color=C["card2"], corner_radius=10)
-        # Primero los botones: así el texto nunca les quita espacio
+        # Buttons first: that way the text never takes their space
         ctk.CTkButton(self.frame, text="✕", width=28, height=28, fg_color="transparent",
                       hover_color=C["hover"], text_color=C["muted"],
                       command=self.hide).pack(side="right", padx=(0, 6))
@@ -478,7 +478,7 @@ class Notice:
         self.visible = False
 
     def show(self, text: str, actions=()):
-        """acciones: lista de (texto, función, es_principal)."""
+        """actions: list of (text, function, is_primary)."""
         for b in self.buttons.winfo_children():
             b.destroy()
         self.lbl.configure(text="  " + tk_safe(text))
@@ -497,10 +497,10 @@ class Notice:
 
 
 # ==============================================================================
-# RESULTADOS DE BÚSQUEDA
+# SEARCH RESULTS
 # ==============================================================================
 class SearchResultsWindow(ctk.CTkToplevel):
-    """Lista de resultados de 'artista canción' para elegir cuáles descargar."""
+    """List of results for 'artist song' to choose which ones to download."""
 
     def __init__(self, app, query: str, results: list):
         super().__init__(app)
@@ -519,11 +519,11 @@ class SearchResultsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="Marca las canciones que quieres descargar.", font=app.f_normal,
                      text_color=C["muted"], anchor="w").pack(fill="x", padx=16, pady=(0, 8))
 
-        song_list = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
+        results_frame = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
                                        border_color=C["border"])
-        song_list.pack(fill="both", expand=True, padx=16)
+        results_frame.pack(fill="both", expand=True, padx=16)
         for i, r in enumerate(results):
-            self._row(song_list, i, r)
+            self._row(results_frame, i, r)
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=16, pady=12)
@@ -534,7 +534,7 @@ class SearchResultsWindow(ctk.CTkToplevel):
         app._button(footer, "Abrir en el navegador", self._open, icon("external", 16),
                    height=36).pack(side="left")
         if results:
-            self.marks[results[0]["id"]].set(True)  # el primero suele ser el correcto
+            self.marks[results[0]["id"]].set(True)  # the first one is usually the right one
         self._count()
         self.after(150, self.focus)
 
@@ -597,10 +597,10 @@ class SearchResultsWindow(ctk.CTkToplevel):
 
 
 # ==============================================================================
-# EXPORTAR
+# EXPORT
 # ==============================================================================
 class ExportWindow(ctk.CTkToplevel):
-    """Elegir qué exportar: lista de reproducción .m3u o tabla .csv."""
+    """Choose what to export: .m3u playlist or .csv table."""
 
     def __init__(self, app):
         super().__init__(app)
@@ -636,7 +636,7 @@ class ExportWindow(ctk.CTkToplevel):
         container.pack(fill="x", padx=18, pady=5)
 
         def choose():
-            self.destroy()       # primero se cierra esta ventana; luego sale "Guardar como"
+            self.destroy()       # this window closes first; then "Save as" appears
             self.app.after(50, action)
         button = self.app._button(container, title, choose, icon("export", 16, C["on_accent"]),
                                 accent=True, height=36, width=300, state="normal" if active else "disabled")
@@ -647,10 +647,10 @@ class ExportWindow(ctk.CTkToplevel):
 
 
 # ==============================================================================
-# EDITOR DE ETIQUETAS
+# TAG EDITOR
 # ==============================================================================
 class TagEditorWindow(ctk.CTkToplevel):
-    """Corrige título, artista, álbum, año, género y portada de un archivo ya descargado."""
+    """Fixes the title, artist, album, year, genre and cover of a downloaded file."""
 
     FIELDS = [("title", "Título"), ("artist", "Artista"), ("album", "Álbum"),
               ("year", "Año"), ("genre", "Género")]
@@ -696,8 +696,8 @@ class TagEditorWindow(ctk.CTkToplevel):
                          fg_color=C["input"], border_color=C["border"], text_color=C["text"]).grid(
                 row=i, column=1, sticky="ew", pady=5)
 
-        # Nombre del archivo (sin extensión). Si hoy coincide con el título, lo sigue al
-        # cambiar el título, hasta que el usuario lo escriba a mano.
+        # File name (without extension). If it currently matches the title, it follows the
+        # title as it changes, until the user types it by hand.
         row = len(self.FIELDS)
         ctk.CTkLabel(right, text="Archivo", font=app.f_bold, anchor="w").grid(
             row=row, column=0, sticky="w", padx=(0, 12), pady=(14, 5))
@@ -734,7 +734,7 @@ class TagEditorWindow(ctk.CTkToplevel):
             self.var_filename.set(valid_filename(self.vars["title"].get()))
 
     def _show_final_name(self):
-        """Avisa si el nombre se va a guardar distinto (caracteres no permitidos) o si queda vacío."""
+        """Warns if the name will be saved differently (forbidden characters) or is empty."""
         typed = self.var_filename.get().strip()
         final = valid_filename(typed, self.extension)
         if not final:
@@ -778,9 +778,9 @@ class TagEditorWindow(ctk.CTkToplevel):
         except Exception as e:
             messagebox.showerror("No se pudieron guardar las etiquetas", str(e), parent=self)
             return
-        # Primero las etiquetas, luego el nombre: si renombrar falla, lo demás ya quedó guardado
+        # Tags first, then the name: if renaming fails, the rest is already saved
         try:
-            new_item = rename_file(self.path, name)
+            new_path = rename_file(self.path, name)
         except (OSError, ValueError) as e:
             self.app._on_tags_saved(self.vid, data, self.new_cover)
             self.new_cover = None
@@ -790,18 +790,18 @@ class TagEditorWindow(ctk.CTkToplevel):
                                  f"Las etiquetas sí se guardaron, pero el archivo no se renombró.\n\n{detail}",
                                  parent=self)
             return
-        self.app._on_tags_saved(self.vid, data, self.new_cover, str(new_item))
+        self.app._on_tags_saved(self.vid, data, self.new_cover, str(new_path))
         self.destroy()
 
 
 # ==============================================================================
-# VENTANA PRINCIPAL
+# MAIN WINDOW
 # ==============================================================================
 # ==============================================================================
-# PLAYLISTS VIGILADAS
+# WATCHED PLAYLISTS
 # ==============================================================================
 class WatchedWindow(ctk.CTkToplevel):
-    """Playlists guardadas: AUDYAX revisa si tienen canciones nuevas y baja solo esas."""
+    """Saved playlists: AUDYAX checks whether they have new songs and downloads only those."""
 
     def __init__(self, app):
         super().__init__(app)
@@ -830,9 +830,9 @@ class WatchedWindow(ctk.CTkToplevel):
         app._button(row, "Vigilar", self._add, icon("eye", 16, C["on_accent"]),
                    accent=True, width=110, height=34).pack(side="left", padx=(8, 0))
 
-        self.song_list = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
+        self.items_frame = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
                                             border_color=C["border"])
-        self.song_list.pack(fill="both", expand=True, padx=16)
+        self.items_frame.pack(fill="both", expand=True, padx=16)
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=16, pady=12)
@@ -844,7 +844,7 @@ class WatchedWindow(ctk.CTkToplevel):
         self.after(150, self.focus)
 
     def _suggested(self) -> str:
-        """El enlace copiado o la última playlist bajada, si es una playlist que aún no se vigila."""
+        """The copied link or the last downloaded playlist, if it's a playlist not watched yet."""
         candidates = [getattr(self.app, "last_playlist", "")]
         try:
             candidates.insert(0, self.app.clipboard_get().strip())
@@ -864,25 +864,25 @@ class WatchedWindow(ctk.CTkToplevel):
 
     def refresh(self):
         app = self.app
-        for w in self.song_list.winfo_children():
+        for w in self.items_frame.winfo_children():
             w.destroy()
         self.btn_check_all.configure(state="normal" if app.watched else "disabled")
         if not app.watched:
-            ctk.CTkLabel(self.song_list, text="Todavía no vigilas ninguna playlist.\nPega arriba el enlace de "
+            ctk.CTkLabel(self.items_frame, text="Todavía no vigilas ninguna playlist.\nPega arriba el enlace de "
                                           "una y dale «Vigilar».", font=app.f_normal, text_color=C["muted"],
                          justify="center").pack(pady=40)
             return
         for i, v in enumerate(app.watched):
             if i:
-                ctk.CTkFrame(self.song_list, height=1, fg_color=C["border"]).pack(fill="x", padx=8)
+                ctk.CTkFrame(self.items_frame, height=1, fg_color=C["border"]).pack(fill="x", padx=8)
             self._row(v)
 
     def _row(self, v):
         app = self.app
-        container = ctk.CTkFrame(self.song_list, fg_color="transparent")
+        container = ctk.CTkFrame(self.items_frame, fg_color="transparent")
         container.pack(fill="x", padx=4, pady=6)
         buttons = ctk.CTkFrame(container, fg_color="transparent")
-        buttons.pack(side="right")  # primero: así el texto nunca les quita espacio
+        buttons.pack(side="right")  # first: that way the text never takes their space
         text = ctk.CTkFrame(container, fg_color="transparent")
         text.pack(side="left", fill="x", expand=True, padx=(6, 8))
         ctk.CTkLabel(text, text=shorten(tk_safe(v.get("name") or v["url"]), 40), font=app.f_bold,
@@ -925,7 +925,7 @@ class App(ctk.CTk, *_DND_BASES):
             try:
                 self.TkdndVersion = TkinterDnD._require(self)
                 self.has_dnd = True
-            except Exception:  # tkdnd no disponible en este sistema: sin arrastrar/soltar
+            except Exception:  # tkdnd not available on this system: no drag and drop
                 pass
         self.title("AUDYAX")
         self._set_window_icon()
@@ -940,33 +940,33 @@ class App(ctk.CTk, *_DND_BASES):
         self.f_title = ctk.CTkFont(family=fam, size=24, weight="bold")
         self.f_detail = ctk.CTkFont(family=fam, size=18, weight="bold")
 
-        self.events = queue.Queue()   # worker -> interfaz
-        self.jobs = queue.Queue()  # interfaz -> worker
-        self.pause = threading.Event()        # activado = descargas en pausa
-        self.owners = {}                      # id de canción -> conjunto 'omitir' de su trabajo
-        self.tokens = set()                   # un Event de cancelación por trabajo en curso
+        self.events = queue.Queue()   # worker -> UI
+        self.jobs = queue.Queue()  # UI -> worker
+        self.pause = threading.Event()        # set = downloads paused
+        self.owners = {}                      # song id -> 'skip' set of its job
+        self.tokens = set()                   # one cancellation Event per running job
         self.tokens_lock = threading.Lock()
-        self.threads = []                       # hilos que atienden la cola de trabajos
+        self.threads = []                       # threads serving the job queue
         self.limit = threading.BoundedSemaphore(parallel_downloads(self.cfg))
         self.limit_n = parallel_downloads(self.cfg)
-        self.pool = ThreadPoolExecutor(max_workers=4)  # descarga de miniaturas
+        self.pool = ThreadPoolExecutor(max_workers=4)  # thumbnail downloads
         self.pending = 0
         self.general_errors = 0
-        self.rows = {}   # id -> datos de la canción
-        self.sel = None   # id de la canción mostrada en el detalle
-        self.order = ("num", False)   # (columna, descendente); "num" = orden de llegada
-        self._visible = set()        # ids que pasan el filtro actual
+        self.rows = {}   # id -> song data
+        self.sel = None   # id of the song shown in the detail panel
+        self.order = ("num", False)   # (column, descending); "num" = arrival order
+        self._visible = set()        # ids that pass the current filter
         self._view_scheduled = False
         self.results_window = None
         self.export_window = None
         self.watched_window = None
-        self.player = None          # barra del mini reproductor (se crea al usarla)
+        self.player = None          # mini player bar (created on first use)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
         self.cfg["watched"] = self.watched
-        self.checking = set()           # urls de vigiladas que se están revisando
-        self.watched_new = {}             # url -> canciones nuevas encontradas en la última revisión
-        self._offered_watch = set()      # playlists a las que ya se les ofreció vigilarlas
-        self.batch = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
+        self.checking = set()           # urls of watched playlists being checked
+        self.watched_new = {}             # url -> new songs found in the last check
+        self._offered_watch = set()      # playlists that were already offered for watching
+        self.batch = {"ok": 0, "err": 0, "omit": 0}  # result of the current batch (notification)
         self._background_notice_shown = False
         self.tray = Tray(self._tray_image(),
                                on_open=lambda: self.events.put(("tray", "open")),
@@ -975,7 +975,7 @@ class App(ctk.CTk, *_DND_BASES):
                                is_paused=lambda: self.pause.is_set())
         self.searching = False
         self.updating = False
-        self._last_offered = ""     # último enlace del portapapeles que ya se ofreció
+        self._last_offered = ""     # last clipboard link already offered
         self._clipboard_scheduled = False
 
         self.ico_status = {"green": icon("ok", 20, "#2ecc71"), "yellow": icon("clock", 20, "#f1c40f"),
@@ -998,7 +998,7 @@ class App(ctk.CTk, *_DND_BASES):
         if self.cfg.get("check_watched", True) and self.watched:
             self.after(4000, lambda: self._check_all_watched(on_open=True))
 
-    # ---------------------------------------------------------------- construcción
+    # ---------------------------------------------------------------- building
     def _button(self, parent, text, command, icon_=None, accent=False, **kw):
         if accent:
             style = dict(fg_color=C["accent"], hover_color=C["accent_hover"],
@@ -1016,7 +1016,7 @@ class App(ctk.CTk, *_DND_BASES):
 
     def _build(self):
         rg_initial = bool(self.cfg["replaygain"]) and HAS_MUTAGEN
-        norm_initial = bool(self.cfg["normalize"]) and not rg_initial  # nunca las dos a la vez
+        norm_initial = bool(self.cfg["normalize"]) and not rg_initial  # never both at once
         self.var_url = tk.StringVar()
         self.var_folder = tk.StringVar(value=self.cfg["folder"])
         self.var_format = tk.StringVar(value=self.cfg["audio_format"])
@@ -1036,14 +1036,14 @@ class App(ctk.CTk, *_DND_BASES):
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
 
-        # Encabezado
+        # Header
         header = ctk.CTkFrame(main, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ctk.CTkLabel(header, text="AUDYAX", font=self.f_title, anchor="w").pack(anchor="w")
         ctk.CTkLabel(header, text="Pega el enlace  •  Descarga  •  Disfruta", font=self.f_normal,
                      text_color=C["muted"], anchor="w").pack(anchor="w")
 
-        # Tarjeta de controles
+        # Controls card
         ctrl = self._card(main)
         ctrl.grid(row=1, column=0, sticky="ew")
         ctrl.grid_columnconfigure(1, weight=1)
@@ -1064,7 +1064,7 @@ class App(ctk.CTk, *_DND_BASES):
         self.btn_download = self._button(ctrl, "Descargar", self._on_download, self.ico_download,
                                          accent=True, width=130, height=38)
         self.btn_download.grid(row=0, column=3, padx=(4, 14), pady=(12, 6))
-        # El botón dice "Buscar" cuando lo escrito no es un enlace
+        # The button says "Buscar" when the typed text isn't a link
         self.var_url.trace_add("write", lambda *a: self._update_main_button())
 
         row2 = ctk.CTkFrame(ctrl, fg_color="transparent")
@@ -1111,12 +1111,12 @@ class App(ctk.CTk, *_DND_BASES):
         checkbox("Portada cuadrada", self.var_crop)
         self._on_format_change()
 
-        # Avisos (ocultos hasta que hagan falta)
+        # Notices (hidden until needed)
         self.clipboard_notice = Notice(self, ctrl, 3, "link")
         self.update_notice = Notice(self, ctrl, 4, "refresh")
         self.watched_notice = Notice(self, ctrl, 5, "eye")
 
-        # Lista
+        # List
         list_frame = self._card(main)
         list_frame.grid(row=2, column=0, sticky="nsew", pady=10)
         self._build_list_bar(list_frame)
@@ -1128,7 +1128,7 @@ class App(ctk.CTk, *_DND_BASES):
                         hover_color=C["accent_hover"], border_color=C["muted"],
                         checkmark_color=C["on_accent"], command=self._check_all).grid(
             row=0, column=0, padx=(10, 0), pady=6)
-        # Cabeceras: clic para ordenar (▲ ascendente, ▼ descendente, tercer clic = orden de llegada)
+        # Headers: click to sort (▲ ascending, ▼ descending, third click = arrival order)
         self.headers = {}
         for col, text, span, key in [(1, "Estado", 1, "status"), (2, "Título", 2, "title"),
                                         (4, "Artista", 1, "artist"), (5, "Álbum", 1, "album"),
@@ -1145,7 +1145,7 @@ class App(ctk.CTk, *_DND_BASES):
                                             scrollbar_button_hover_color=C["border"])
         self.song_list.pack(fill="both", expand=True, padx=(6, 2), pady=(0, 6))
 
-        # Detalle
+        # Detail
         detail_card = self._card(main)
         detail_card.grid(row=3, column=0, sticky="ew")
         self.detail_header = ctk.CTkFrame(detail_card, fg_color="transparent")
@@ -1173,11 +1173,11 @@ class App(ctk.CTk, *_DND_BASES):
         self.l_chip = ctk.CTkLabel(info, text="", font=self.f_small, fg_color=C["card2"],
                                    text_color=C["muted"], corner_radius=12, height=24)
         self.l_chip.pack(anchor="w", pady=4)
-        self.l_chip.pack_forget()  # solo se muestra cuando hay año o género
+        self.l_chip.pack_forget()  # only shown when there is a year or genre
         self.l_detail_info = ctk.CTkLabel(info, text="", font=self.f_small, text_color=C["muted"],
                                        anchor="w", justify="left")
         self.l_detail_info.pack(anchor="w")
-        # Separador fino + datos técnicos del archivo
+        # Thin separator + technical data of the file
         ctk.CTkFrame(self.detail_body, width=1, height=70, fg_color=C["border"]).grid(
             row=0, column=2, sticky="ns", padx=(6, 24))
         data = ctk.CTkFrame(self.detail_body, fg_color="transparent")
@@ -1196,7 +1196,7 @@ class App(ctk.CTk, *_DND_BASES):
 
         self.detail_buttons = ctk.CTkFrame(detail_card, fg_color="transparent")
         self.detail_buttons.pack(fill="x", padx=12, pady=(2, 10))
-        # width pequeño: cada botón mide lo que su texto (si no, todos miden 140 y no caben)
+        # small width: each button is as wide as its text (otherwise all are 140 and don't fit)
         for text, ico, cmd in [("Copiar enlace", "copy", self._copy_link),
                                 ("Abrir enlace", "external", lambda: self._open_link()),
                                 ("Carpeta", "folder", self._open_song_folder),
@@ -1208,7 +1208,7 @@ class App(ctk.CTk, *_DND_BASES):
         self._button(self.detail_buttons, "Limpiar lista", self._clear_list, icon("trash", 16),
                     height=34).pack(side="right")
 
-        # Barra de estado: contadores por color + progreso general
+        # Status bar: counters per color + overall progress
         bar = ctk.CTkFrame(main, fg_color="transparent")
         bar.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.counters = {}
@@ -1226,7 +1226,7 @@ class App(ctk.CTk, *_DND_BASES):
         self.progress.set(0)
         self.progress.pack(side="right", padx=10)
 
-        # Arrastrar y soltar enlaces sobre la ventana, el cuadro de texto o la lista
+        # Drag and drop links onto the window, the text box or the list
         if self.has_dnd:
             for w in (self, self.entry._entry, self.song_list._parent_canvas):
                 try:
@@ -1263,7 +1263,7 @@ class App(ctk.CTk, *_DND_BASES):
         if self.theme == "dark":
             self.sw_theme.select()
 
-    # ---------------------------------------------------------------- tema / configuración
+    # ---------------------------------------------------------------- theme / settings
     def _about(self):
         top = ctk.CTkToplevel(self)
         top.title("Acerca de AUDYAX")
@@ -1328,7 +1328,7 @@ class App(ctk.CTk, *_DND_BASES):
         tabs.set("General")
         self.after(150, top.focus)
 
-    # Piezas comunes de la ventana de configuración
+    # Common pieces of the settings window
     def _cfg_title(self, parent, text, first=False):
         ctk.CTkLabel(parent, text=text, font=self.f_bold).pack(anchor="w", padx=12, pady=(6 if first else 18, 6))
 
@@ -1419,7 +1419,7 @@ class App(ctk.CTk, *_DND_BASES):
                     icon("refresh", 16), height=32).pack(anchor="w", padx=12, pady=(10, 0))
 
     def _tab_extras(self, t):
-        """Letras y datos de MusicBrainz / Cover Art Archive."""
+        """Lyrics and MusicBrainz / Cover Art Archive data."""
         self._cfg_title(t, "Letras", first=True)
         names = {"off": "No", "lrc": "Archivo .lrc", "embedded": "Dentro del archivo", "both": "Ambas"}
         inverse = {v: k for k, v in names.items()}
@@ -1447,9 +1447,9 @@ class App(ctk.CTk, *_DND_BASES):
 
 
     def _tab_advanced(self, t):
-        """Opciones avanzadas. Todas vienen apagadas; solo actúan si se encienden."""
+        """Advanced options. All of them come off; they only act when turned on."""
         self._cfg_note(t, "Estas opciones vienen apagadas. Actívalas solo si las necesitas.")
-        dependents = []  # (interruptor BooleanVar, [widgets que dependen de él])
+        dependents = []  # (switch BooleanVar, [widgets that depend on it])
 
         def refresh():
             for var, widgets in dependents:
@@ -1458,7 +1458,7 @@ class App(ctk.CTk, *_DND_BASES):
             show_file_row()
             validate_proxy()
 
-        # 1) Límite de velocidad
+        # 1) Speed limit
         self._cfg_title(t, "Límite de velocidad")
         var_speed = self._cfg_switch(t, "Limitar la velocidad de descarga", "speed_limit_enabled",
                                         on_change=refresh)
@@ -1502,7 +1502,7 @@ class App(ctk.CTk, *_DND_BASES):
                      "servidor:puerto." if bad else
                      ("Escribe la dirección del proxy." if var_px.get() and not text else ""))
             proxy_error.configure(text=error)
-            if error:  # el aviso rojo solo ocupa espacio cuando hay algo que decir
+            if error:  # the red warning only takes space when there's something to say
                 proxy_error.pack(anchor="w", padx=12, pady=(2, 0), fill="x", before=proxy_help)
             else:
                 proxy_error.pack_forget()
@@ -1563,7 +1563,7 @@ class App(ctk.CTk, *_DND_BASES):
         refresh()
 
     def _organize_section(self, top):
-        """Configuración > Organizar descargas (desactivado por defecto: todo junto)."""
+        """Settings > Organize downloads (off by default: everything together)."""
         self._cfg_title(top, "Organizar descargas", first=True)
         current = self.cfg.get("organize", "flat")
         if current not in ORGANIZE_OPTIONS:
@@ -1608,20 +1608,20 @@ class App(ctk.CTk, *_DND_BASES):
             self.detail_body.pack(fill="x", padx=12, pady=(2, 0), after=self.detail_header)
             self.btn_collapse.configure(text="▾")
 
-    # ---------------------------------------------------------------- acciones
+    # ---------------------------------------------------------------- actions
     def _on_format_change(self):
         audio_format = self.var_format.get()
         original = audio_format == "original"
         if original:
             self.var_norm.set(False)
-        # En m4a el audio de YouTube (AAC) se copia tal cual, sin recodificar: la calidad
-        # solo se aplica si se normaliza (entonces sí hay que recodificar).
+        # In m4a, YouTube's audio (AAC) is copied as is, without re-encoding: the quality
+        # only applies when normalizing (then it does have to be re-encoded).
         uses_quality = audio_format in ("mp3", "opus") or (audio_format == "m4a" and self.var_norm.get())
         self.cb_quality.configure(state="normal" if uses_quality else "disabled")
         self.chk_norm.configure(state="disabled" if original else "normal")
 
     def _on_rg_checked(self):
-        """ReplayGain y normalizar son excluyentes: marcar una desmarca la otra."""
+        """ReplayGain and normalization are exclusive: checking one unchecks the other."""
         if self.var_rg.get():
             self.var_norm.set(False)
         self._on_format_change()
@@ -1638,10 +1638,10 @@ class App(ctk.CTk, *_DND_BASES):
             pass
 
     def _choose_folder(self):
-        new_item = filedialog.askdirectory(initialdir=self.var_folder.get() or None,
+        chosen = filedialog.askdirectory(initialdir=self.var_folder.get() or None,
                                         title="Elige la carpeta donde guardar")
-        if new_item:
-            self.var_folder.set(os.path.normpath(new_item))
+        if chosen:
+            self.var_folder.set(os.path.normpath(chosen))
 
     def _current_cfg(self) -> dict:
         return {
@@ -1665,7 +1665,7 @@ class App(ctk.CTk, *_DND_BASES):
         }
 
     def _on_download(self):
-        """Botón principal: descarga si es un enlace; si es texto, busca por nombre."""
+        """Main button: downloads if it's a link; if it's text, searches by name."""
         text = self.var_url.get().strip()
         if not text:
             messagebox.showinfo("AUDYAX", "Pega un enlace de YouTube o escribe artista y canción.")
@@ -1685,7 +1685,7 @@ class App(ctk.CTk, *_DND_BASES):
         else:
             self.btn_download.configure(text="Descargar", image=self.ico_download)
 
-    # ---------------------------------------------------------------- búsqueda
+    # ---------------------------------------------------------------- search
     def _search(self, text: str):
         if self.searching:
             return
@@ -1719,9 +1719,9 @@ class App(ctk.CTk, *_DND_BASES):
         except Exception:
             pass
 
-    # ---------------------------------------------------------------- portapapeles / soltar
+    # ---------------------------------------------------------------- clipboard / drop
     def _on_focus(self, _event=None):
-        # FocusIn llega una vez por cada widget; se agrupa en una sola revisión
+        # FocusIn arrives once per widget; they are grouped into a single check
         if not self._clipboard_scheduled:
             self._clipboard_scheduled = True
             self.after(200, self._check_clipboard)
@@ -1754,7 +1754,7 @@ class App(ctk.CTk, *_DND_BASES):
     # ---------------------------------------------------------------- yt-dlp
     def _check_ytdlp(self, manual: bool):
         if not can_self_update():
-            # En el .exe yt-dlp va dentro del programa: lo que se actualiza es AUDYAX entero
+            # In the .exe yt-dlp is inside the program: what gets updated is the whole of AUDYAX
             def app_job():
                 try:
                     latest = latest_app_version()
@@ -1840,11 +1840,11 @@ class App(ctk.CTk, *_DND_BASES):
             messagebox.showerror("Carpeta no válida", str(e))
             return False
         save_config(cfg)
-        cfg["subfolder"] = subfolder  # p. ej. la carpeta de la playlist al reintentar
-        cfg["extras"] = extras or {}    # título/artista/álbum a conservar (ver _reintentar)
-        cfg.update(overrides or {})       # p. ej. playlist vigilada: su carpeta y solo las nuevas
+        cfg["subfolder"] = subfolder  # e.g. the playlist's folder when retrying
+        cfg["extras"] = extras or {}    # title/artist/album to keep (see _retry)
+        cfg.update(overrides or {})       # e.g. watched playlist: its folder and only the new songs
         if self.pending == 0:
-            self.batch = {"ok": 0, "err": 0, "omit": 0}  # empieza una tanda nueva
+            self.batch = {"ok": 0, "err": 0, "omit": 0}  # a new batch starts
         self.pending += 1
         self.jobs.put((url, cfg))
         self._ensure_workers()
@@ -1852,9 +1852,9 @@ class App(ctk.CTk, *_DND_BASES):
         return True
 
     def _ensure_workers(self):
-        """Tantos hilos atendiendo la cola como descargas simultáneas: así varias canciones
-        sueltas (p. ej. elegidas en la búsqueda) también se bajan a la vez. El semáforo
-        self.limite es el que pone el tope real de canciones descargándose."""
+        """As many threads serving the queue as parallel downloads: that way several
+        individual songs (e.g. chosen in the search) also download at once. The
+        self.limit semaphore is what sets the real cap of songs downloading."""
         self.threads = [h for h in self.threads if h.is_alive()]
         while len(self.threads) < self.limit_n:
             h = threading.Thread(target=self._worker_loop, daemon=True)
@@ -1864,11 +1864,11 @@ class App(ctk.CTk, *_DND_BASES):
     def _worker_loop(self):
         while True:
             url, cfg = self.jobs.get()
-            token = threading.Event()  # cancelación propia de este trabajo
-            skip = set()             # canciones de este trabajo canceladas una a una
+            token = threading.Event()  # this job's own cancellation
+            skip = set()             # songs of this job cancelled one by one
 
             def emit(ev, skip=skip):
-                if ev[0] == "new":   # esta canción la baja este trabajo
+                if ev[0] == "new":   # this job downloads this song
                     self.owners[ev[1]] = skip
                 self.events.put(ev)
             with self.tokens_lock:
@@ -1888,19 +1888,19 @@ class App(ctk.CTk, *_DND_BASES):
         with self.tokens_lock:
             for token in self.tokens:
                 token.set()
-        try:  # descarta los trabajos que aún no empezaron
+        try:  # drops the jobs that haven't started yet
             while True:
                 self.jobs.get_nowait()
                 self.pending -= 1
         except queue.Empty:
             pass
         if self.pause.is_set():
-            self._toggle_pause()  # al cancelar, se sale de la pausa
+            self._toggle_pause()  # cancelling also leaves the pause
         self._update_buttons()
 
     def _cancel_songs(self, vids=None):
-        """Cancela la canción seleccionada (la de color morado) y, si hay, las marcadas con la
-        casilla. No hace falta marcar nada: basta con seleccionarla. Las demás siguen."""
+        """Cancels the selected song (the purple one) and, if any, the ones checked with the
+        checkbox. No need to check anything: selecting it is enough. The rest continue."""
         if vids is None:
             vids = ([self.sel] if self.sel in self.rows else []) + \
                    [v for v in self._checked() if v != self.sel]
@@ -1912,21 +1912,21 @@ class App(ctk.CTk, *_DND_BASES):
         for vid in valid:
             owner = self.owners.get(vid)
             if owner is not None:
-                owner.add(vid)  # el motor la salta o la corta en el próximo aviso de progreso
+                owner.add(vid)  # the engine skips it or stops it at the next progress update
             f = self.rows[vid]
             f["previous_text"] = ""
             self._row(vid, color="red", text="Cancelada", reason="Cancelada por el usuario")
             f["cancelled"] = True
 
     def _new_menu(self) -> tk.Menu:
-        """Menú emergente con los colores del tema actual (claro u oscuro)."""
+        """Popup menu with the current theme's colors (light or dark)."""
         i = 1 if self.theme == "dark" else 0
         return tk.Menu(self, tearoff=0, bg=C["card"][i], fg=C["text"][i], activebackground=C["sel"][i],
                        activeforeground=C["text"][i], disabledforeground=C["muted"][i],
                        relief="flat", borderwidth=1, font=(self.f_normal.cget("family"), 11))
 
     def _row_menu(self, vid, event):
-        """Menú de clic derecho sobre una canción de la lista."""
+        """Right-click menu on a song in the list."""
         if vid not in self.rows:
             return
         self._select(vid)
@@ -1959,7 +1959,7 @@ class App(ctk.CTk, *_DND_BASES):
             self.lbl_pause.pack_forget()
         else:
             self.pause.set()
-            # Las que se estaban bajando o procesando muestran "En pausa"
+            # Songs being downloaded or processed show "En pausa"
             for vid, f in list(self.rows.items()):
                 if f["color"] == "yellow" and f["text"] != "En cola":
                     f["previous_text"] = f["text"]
@@ -1972,7 +1972,7 @@ class App(ctk.CTk, *_DND_BASES):
         save_config(self._current_cfg())
         n = parallel_downloads(self.cfg)
         if n != self.limit_n:
-            # Los trabajos ya empezados siguen con el límite anterior; los nuevos usan este
+            # Jobs already started keep the previous limit; new ones use this one
             self.limit_n = n
             self.limit = threading.BoundedSemaphore(n)
             if self.pending:
@@ -2000,10 +2000,10 @@ class App(ctk.CTk, *_DND_BASES):
                 "Para escribir el ReplayGain hace falta la librería mutagen.\n\n"
                 "Instálala con:  pip install mutagen")
 
-    # ---------------------------------------------------------------- lista
+    # ---------------------------------------------------------------- list
     def _row(self, vid: str, **fields):
-        new_item = vid not in self.rows
-        if new_item:
+        is_new = vid not in self.rows
+        if is_new:
             self.rows[vid] = {
                 "num": len(self.rows) + 1, "color": "yellow", "text": "En cola", "title": vid,
                 "artist": "", "album": "", "year": "", "genre": "", "url": "", "path": "",
@@ -2012,29 +2012,29 @@ class App(ctk.CTk, *_DND_BASES):
                 "previous_text": "", "pos": len(self.rows), "check": tk.BooleanVar(value=False)}
             self.rows[vid]["w"] = ListRow(self, self.song_list, vid)
             if self._view_active():
-                self.rows[vid]["w"].frame.pack_forget()  # la vista decide si y dónde va
+                self.rows[vid]["w"].frame.pack_forget()  # the view decides whether and where it goes
         f = self.rows[vid]
         if self.pause.is_set() and fields.get("text") and f["color"] == "yellow" \
                 and fields.get("color", "yellow") == "yellow" and f["text"] == "En pausa" \
                 and fields["text"] != "En pausa":
-            f["previous_text"] = fields.pop("text")  # en pausa se sigue mostrando "En pausa"
+            f["previous_text"] = fields.pop("text")  # while paused it keeps showing "En pausa"
         before = {k: f.get(k) for k in ("color", "title", "artist", "album", "year")}
         for k, v in fields.items():
             if v is not None and k in f and k not in ("w", "check"):
                 f[k] = v
         if self._view_active():
             changed = any(f.get(k) != v for k, v in before.items())
-            if new_item or (changed and (vid in self._visible) != self._matches(f)) or \
+            if is_new or (changed and (vid in self._visible) != self._matches(f)) or \
                     (changed and self.order[0] != "num"):
                 self._schedule_view()
-        elif new_item:
+        elif is_new:
             self._visible.add(vid)
         if f["thumbnail"] and not f["img_requested"]:
             f["img_requested"] = True
             self.pool.submit(self._fetch_image, vid, f["thumbnail"])
         f["w"].refresh_row(f)
         f["w"].paint(vid == self.sel)
-        if new_item and self.sel is None:
+        if is_new and self.sel is None:
             self._select(vid)
         elif vid == self.sel:
             self._show_detail()
@@ -2051,7 +2051,7 @@ class App(ctk.CTk, *_DND_BASES):
             f["num"] = i
         self._apply_view()
 
-    # ---------------------------------------------------------------- filtrar / ordenar
+    # ---------------------------------------------------------------- filter / sort
     def _build_list_bar(self, container):
         bar = ctk.CTkFrame(container, fg_color="transparent")
         bar.pack(fill="x", padx=8, pady=(8, 2))
@@ -2072,7 +2072,7 @@ class App(ctk.CTk, *_DND_BASES):
                           command=lambda v: self._apply_view()).pack(side="left")
         self.lbl_showing = ctk.CTkLabel(bar, text="", font=self.f_small, text_color=C["muted"])
         self.lbl_showing.pack(side="left", padx=14)
-        # Controles de la cola, a la derecha: Exportar | Pausar | Cancelar todo
+        # Queue controls, on the right: Export | Pause | Cancel all
         self.btn_cancel = self._button(bar, "Cancelar todo", self._cancel, icon("cancel", 16),
                                         width=130, height=32, state="disabled")
         self.btn_cancel.pack(side="right")
@@ -2085,7 +2085,7 @@ class App(ctk.CTk, *_DND_BASES):
         self.btn_export.pack(side="right", padx=(0, 16))
 
     def _view_active(self) -> bool:
-        """True si hay filtro u orden distinto al de llegada (entonces la lista se re-arma)."""
+        """True if there is a filter or an order other than arrival (then the list is rebuilt)."""
         return (bool(self.var_filter.get().strip()) or STATUS_FILTERS.get(self.var_status.get())
                 is not None or self.order[0] != "num")
 
@@ -2097,7 +2097,7 @@ class App(ctk.CTk, *_DND_BASES):
         return all(p in text for p in self.var_filter.get().casefold().split())
 
     def _rows_in_view(self) -> list:
-        """Ids visibles, en el orden en que se muestran."""
+        """Visible ids, in the order they are shown."""
         items = [(vid, f) for vid, f in self.rows.items() if self._matches(f)]
         col, desc = self.order
         if col == "num":
@@ -2105,7 +2105,7 @@ class App(ctk.CTk, *_DND_BASES):
         elif col == "status":
             items.sort(key=lambda it: (STATUS_ORDER.get(it[1]["color"], 9), it[1]["num"]), reverse=desc)
         else:
-            # Las que no tienen ese dato van siempre al final, en orden de llegada
+            # Rows without that value always go last, in arrival order
             filled = [it for it in items if str(it[1].get(col) or "").strip()]
             empty_rows = [it for it in items if not str(it[1].get(col) or "").strip()]
             filled.sort(key=lambda it: (str(it[1][col]).casefold(), it[1]["num"]), reverse=desc)
@@ -2139,16 +2139,16 @@ class App(ctk.CTk, *_DND_BASES):
         elif not desc:
             self.order = (key, True)
         else:
-            self.order = ("num", False)  # tercer clic: vuelve al orden de llegada
+            self.order = ("num", False)  # third click: back to arrival order
         for c, (lbl, text) in self.headers.items():
             arrow = (" ▼" if self.order[1] else " ▲") if c == self.order[0] else ""
             lbl.configure(text=text + arrow)
         self._apply_view()
 
-    # ---------------------------------------------------------------- exportar
+    # ---------------------------------------------------------------- export
     def _export_menu(self):
-        """Botón Exportar: ventanita con las dos opciones. (Antes era un menú emergente de
-        Windows, que en algunos equipos no llegaba a aparecer.)"""
+        """Export button: small window with the two options. (It used to be a Windows popup
+        menu, which on some computers never appeared.)"""
         if self.export_window is not None and self.export_window.winfo_exists():
             self.export_window.lift()
             self.export_window.focus()
@@ -2208,7 +2208,7 @@ class App(ctk.CTk, *_DND_BASES):
 
     def _process_events(self):
         try:
-            for _ in range(30):  # por tandas, para que la ventana no se congele con playlists grandes
+            for _ in range(30):  # in batches, so the window doesn't freeze with big playlists
                 self._handle(self.events.get_nowait())
         except queue.Empty:
             pass
@@ -2219,9 +2219,9 @@ class App(ctk.CTk, *_DND_BASES):
         cancelled = kind in ("info", "status", "error", "rg") and self.rows.get(
             ev[1] if len(ev) > 1 else None, {}).get("cancelled")
         if cancelled:
-            return  # avisos atrasados de una canción que el usuario canceló
+            return  # late events of a song the user cancelled
         if kind == "new":
-            if ev[1] in self.rows:  # reintento: se vuelven a leer los datos del archivo
+            if ev[1] in self.rows:  # retry: the file's data is read again
                 self.rows[ev[1]].update(data=None, data_requested=False, cancelled=False)
             self._row(ev[1], color="yellow", text="En cola", reason="", path="", **ev[2])
         elif kind == "info":
@@ -2232,7 +2232,7 @@ class App(ctk.CTk, *_DND_BASES):
         elif kind == "done":
             self.batch["ok"] += 1
             if ev[1] in self.rows:
-                self.rows[ev[1]]["cancelled"] = False  # terminó justo antes de cancelarla
+                self.rows[ev[1]]["cancelled"] = False  # it finished right before being cancelled
             self._row(ev[1], color="green", text="Descargada", reason="", **ev[2])
         elif kind == "rg":
             self._row(ev[1], replaygain=ev[2])
@@ -2267,7 +2267,7 @@ class App(ctk.CTk, *_DND_BASES):
         elif kind == "end":
             self.pending = max(0, self.pending - 1)
             if self.pending == 0 and self.pause.is_set():
-                self._toggle_pause()  # no queda nada en pausa
+                self._toggle_pause()  # nothing is left paused
             if self.pending == 0:
                 self._on_batch_done()
             self._update_buttons()
@@ -2313,7 +2313,7 @@ class App(ctk.CTk, *_DND_BASES):
         if self.sel == vid:
             self._show_detail()
 
-    # ---------------------------------------------------------------- selección
+    # ---------------------------------------------------------------- selection
     def _select(self, vid):
         previous = self.sel
         self.sel = vid
@@ -2328,7 +2328,7 @@ class App(ctk.CTk, *_DND_BASES):
         self.var_all.set(bool(visible_ids) and all(f["check"].get() for f in visible_ids))
 
     def _check_all(self):
-        """Marca/desmarca solo las filas que se ven (respeta el filtro)."""
+        """Checks/unchecks only the visible rows (respects the filter)."""
         value = self.var_all.get()
         for vid in self._visible:
             if vid in self.rows:
@@ -2338,12 +2338,12 @@ class App(ctk.CTk, *_DND_BASES):
         return [vid for vid, f in self.rows.items() if f["check"].get()]
 
     def _clear_list(self):
-        # Sin marcadas: se quitan las que se ven (p. ej. filtrando "Con error" se limpian los errores)
+        # Nothing checked: the visible rows are removed (e.g. filtering "Con error" clears the errors)
         self._remove_rows(self._checked() or [v for v in self.rows if v in self._visible])
 
     def _remove_rows(self, target):
-        """Quita filas de la lista (no borra archivos). Las que están en cola o bajándose se
-        dejan: primero hay que cancelarlas."""
+        """Removes rows from the list (doesn't delete files). Queued or downloading ones
+        are kept: they have to be cancelled first."""
         in_progress = [v for v in target if v in self.rows and self.rows[v]["color"] == "yellow"]
         if target and len(in_progress) == len(target):
             messagebox.showinfo("Quitar de la lista",
@@ -2365,7 +2365,7 @@ class App(ctk.CTk, *_DND_BASES):
         self._show_detail()
         self._update_counters()
 
-    # ---------------------------------------------------------------- detalle
+    # ---------------------------------------------------------------- detail
     def _show_detail(self):
         vid = self.sel if self.sel in self.rows else None
         if not vid:
@@ -2430,12 +2430,12 @@ class App(ctk.CTk, *_DND_BASES):
         if url:
             webbrowser.open(url)
 
-    # ---------------------------------------------------------------- mini reproductor
+    # ---------------------------------------------------------------- mini player
     def _is_playable(self, f) -> bool:
         return f["color"] == "green" and bool(f["path"]) and Path(f["path"]).exists()
 
     def _on_double_click(self, vid):
-        """Doble clic: si ya está descargada, suena; si no, se abre su enlace."""
+        """Double click: if it's downloaded, it plays; otherwise its link opens."""
         f = self.rows.get(vid)
         if f and self._is_playable(f):
             self._play(vid)
@@ -2448,7 +2448,7 @@ class App(ctk.CTk, *_DND_BASES):
                 "image": f["img_pil"]}
 
     def _neighbor(self, item, step):
-        """La canción descargada anterior/siguiente según el orden en que se ve la lista."""
+        """The previous/next downloaded song according to the order the list is shown in."""
         ids = [v for v in self._rows_in_view() if self._is_playable(self.rows[v])]
         if not ids:
             return None
@@ -2473,7 +2473,7 @@ class App(ctk.CTk, *_DND_BASES):
             return
         self.player.grid(row=5, column=0, sticky="ew", pady=(10, 0))
 
-    # ---------------------------------------------------------------- playlists vigiladas
+    # ---------------------------------------------------------------- watched playlists
     def _open_watched(self):
         v = self.watched_window
         if v is not None and v.winfo_exists():
@@ -2517,7 +2517,7 @@ class App(ctk.CTk, *_DND_BASES):
         def job():
             try:
                 new_songs = watched.check(snapshot, net)
-            except Exception as e:  # no debería pasar: revisar ya atrapa los errores
+            except Exception as e:  # shouldn't happen: check already catches errors
                 snapshot["error"], new_songs = str(e), []
             self.events.put(("watched_checked", v["url"], snapshot, new_songs, on_open))
         threading.Thread(target=job, daemon=True).start()
@@ -2534,11 +2534,11 @@ class App(ctk.CTk, *_DND_BASES):
                 v.update(snapshot)
                 break
         else:
-            return  # la quitaron mientras se revisaba
+            return  # it was removed while being checked
         self.watched_new[url] = new_songs
         save_config(self._current_cfg())
         self._refresh_watched()
-        if on_open and not self.checking:  # terminó la revisión de todas: un solo aviso
+        if on_open and not self.checking:  # all checks finished: a single notice
             with_new = [v for v in self.watched if self.watched_new.get(v["url"])]
             if not with_new:
                 return
@@ -2565,7 +2565,7 @@ class App(ctk.CTk, *_DND_BASES):
             self._refresh_watched()
 
     def _on_playlist_downloaded(self, url, title):
-        """Se bajó una playlist: ofrecer vigilarla (una vez por sesión y si aún no lo está)."""
+        """A playlist was downloaded: offer to watch it (once per session and if not watched yet)."""
         self.last_playlist = url
         canonical = watched.playlist_url(url) if watched.is_playlist(url) else ""
         if not canonical or canonical in self._offered_watch or any(v["url"] == canonical for v in self.watched):
@@ -2609,7 +2609,7 @@ class App(ctk.CTk, *_DND_BASES):
         f = self.rows.get(vid)
         if not f:
             return
-        f.update(data=None, data_requested=False)  # el tamaño del archivo cambia
+        f.update(data=None, data_requested=False)  # the file size changes
         self._row(vid, **data, **({"path": path} if path else {}))
         if cover:
             self._set_image(vid, cover)
@@ -2622,15 +2622,15 @@ class App(ctk.CTk, *_DND_BASES):
             return
         for vid in valid:
             f = self.rows[vid]
-            # Si venía de una playlist de YouTube Music se conservan su título, artista y álbum
-            # (al bajarla sola, yt-dlp pondría los del video: "(Official Video)", "ArtistaVEVO"…)
+            # If it came from a YouTube Music playlist, its title, artist and album are kept
+            # (downloading it alone, yt-dlp would use the video's: "(Official Video)", "ArtistVEVO"…)
             extras = None
             if f["url"].startswith("https://music.youtube.com/"):
                 extras = {vid: {k: f[k] for k in ("title", "artist", "album")}}
-            # Se reintenta en la misma subcarpeta (la de su playlist, si venía de una)
+            # Retried in the same subfolder (its playlist's, if it came from one)
             self._enqueue(f["url"], f["subfolder"], extras)
 
-    # ---------------------------------------------------------------- icono, bandeja y avisos
+    # ---------------------------------------------------------------- icon, tray and notifications
     def _set_window_icon(self):
         try:
             if sys.platform.startswith("win") and resource_path("audyax.ico").exists():
@@ -2648,14 +2648,14 @@ class App(ctk.CTk, *_DND_BASES):
             return _draw_icon("note", "#a78bfa", 64)
 
     def _window_active(self) -> bool:
-        """True si el usuario está mirando AUDYAX (para no notificar en ese caso)."""
+        """True if the user is looking at AUDYAX (no notification in that case)."""
         try:
             return self.state() == "normal" and self.focus_displayof() is not None
         except (tk.TclError, KeyError):
             return False
 
     def _on_batch_done(self):
-        """Terminó todo lo que había en cola: notificación (si está activada y no se está mirando)."""
+        """Everything in the queue finished: notification (if enabled and the window isn't being looked at)."""
         ok, err, omit = self.batch["ok"], self.batch["err"], self.batch["omit"]
         self.batch = {"ok": 0, "err": 0, "omit": 0}
         self._tray_text()
@@ -2672,7 +2672,7 @@ class App(ctk.CTk, *_DND_BASES):
             self.tray.update_text(f"AUDYAX — {in_progress} en proceso" if in_progress else "AUDYAX")
 
     def _to_tray(self) -> bool:
-        """Esconde la ventana y deja AUDYAX como icono junto al reloj."""
+        """Hides the window and leaves AUDYAX as an icon next to the clock."""
         if not self.tray.show("AUDYAX"):
             return False
         self.withdraw()
@@ -2702,9 +2702,9 @@ class App(ctk.CTk, *_DND_BASES):
                     return
             self._close()
 
-    # ---------------------------------------------------------------- atajos de teclado
+    # ---------------------------------------------------------------- keyboard shortcuts
     def _setup_shortcuts(self):
-        # En el cuadro de enlace, Ctrl+V va primero aquí (antes del pegado normal del cuadro)
+        # In the link box, Ctrl+V comes here first (before the box's normal paste)
         for keystroke in ("<Control-v>", "<Control-V>"):
             self.entry._entry.bind(keystroke, lambda e: self._shortcut_paste(in_entry=True), add=True)
             self.bind(keystroke, lambda e: self._shortcut_paste())
@@ -2717,7 +2717,7 @@ class App(ctk.CTk, *_DND_BASES):
             self.bind("<Command-f>", self._shortcut_search)
 
     def _focus_in_text(self) -> bool:
-        """True si el cursor está en un cuadro de texto (ahí las teclas hacen lo normal)."""
+        """True if the cursor is in a text box (keys behave normally there)."""
         try:
             w = self.focus_get()
         except (KeyError, tk.TclError):
@@ -2725,10 +2725,10 @@ class App(ctk.CTk, *_DND_BASES):
         return w is not None and w.winfo_class() in ("Entry", "TEntry", "Text")
 
     def _shortcut_paste(self, in_entry: bool = False):
-        """Ctrl+V: si lo copiado es un enlace, se descarga directamente.
-        - Escribiendo en otro cuadro (búsqueda de la lista, configuración…): pegado normal.
-        - En el cuadro de enlace con algo ya escrito: pegado normal (se está editando).
-        - Si lo copiado es texto (no un enlace): se pone en el cuadro para buscarlo con Enter."""
+        """Ctrl+V: if the copied text is a link, it is downloaded right away.
+        - Typing in another box (list search, settings…): normal paste.
+        - In the link box with something already typed: normal paste (it's being edited).
+        - If the copied text isn't a link: it goes into the box to search it with Enter."""
         if not in_entry and self._focus_in_text():
             return None
         if in_entry and self.var_url.get().strip():
@@ -2752,7 +2752,7 @@ class App(ctk.CTk, *_DND_BASES):
         return "break"
 
     def _shortcut_delete(self, _event=None):
-        """Supr: quita de la lista las marcadas o, si no hay, la seleccionada."""
+        """Delete: removes the checked rows from the list or, if none, the selected one."""
         if self._focus_in_text():
             return None
         target = self._checked() or ([self.sel] if self.sel in self.rows else [])
@@ -2765,14 +2765,14 @@ class App(ctk.CTk, *_DND_BASES):
         self.filter_entry._entry.select_range(0, "end")
         return "break"
 
-    # ---------------------------------------------------------------- cierre
+    # ---------------------------------------------------------------- closing
     def _on_window_close(self):
-        """Botón X. Con "Seguir en segundo plano" (activado por defecto), AUDYAX no se cierra:
-        se esconde junto al reloj y sigue descargando. Para salir del todo: icono → Salir.
-        Sin esa opción (o sin bandeja en el sistema) se cierra, preguntando si hay descargas."""
+        """X button. With "Keep running in the background" (on by default), AUDYAX doesn't close:
+        it hides next to the clock and keeps downloading. To quit completely: icon → Salir.
+        Without that option (or without a system tray) it closes, asking if downloads are running."""
         if self.cfg.get("keep_in_background", True) and tray_available() and self._to_tray():
             if not self._background_notice_shown:
-                self._background_notice_shown = True  # se explica solo la primera vez
+                self._background_notice_shown = True  # explained only the first time
                 title = "AUDYAX sigue en segundo plano"
                 message = "Está junto al reloj. Para salir del todo: clic derecho en su icono → Salir."
                 if self.cfg.get("notifications", True) and not self.tray.notify(title, message):
@@ -2794,9 +2794,9 @@ class App(ctk.CTk, *_DND_BASES):
 
 
 def self_test(app: "App", output: str):
-    """--prueba-arranque: comprueba que el programa (sobre todo el .exe) trae todo lo que
-    necesita y que FFmpeg funciona, escribe el resultado en JSON y se cierra.
-    La usa GitHub Actions para probar el .exe en Windows."""
+    """--self-test: checks that the program (especially the .exe) ships everything it
+    needs and that FFmpeg works, writes the result as JSON and exits.
+    GitHub Actions uses it to test the .exe on Windows."""
     import tempfile
 
     from engine import HAS_YTMUSIC, analyze_loudness
@@ -2805,7 +2805,7 @@ def self_test(app: "App", output: str):
          "mutagen": HAS_MUTAGEN, "ytmusicapi": HAS_YTMUSIC, "drag_and_drop": app.has_dnd,
          "tray": tray_available(), "no_tray_reason": no_tray_reason(),
          "notifications": notifications_available(), "icon": resource_path("audyax.ico").exists()}
-    try:  # FFmpeg de verdad: genera un tono y mide su volumen
+    try:  # Real FFmpeg: generates a tone and measures its loudness
         with tempfile.TemporaryDirectory() as tmp:
             tone = Path(tmp) / "tono.mp3"
             subprocess.run([r["ffmpeg"] or "ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
@@ -2822,29 +2822,29 @@ def self_test(app: "App", output: str):
     except Exception as e:
         r["tray_shown"] = False
         r["tray_error"] = str(e)
-    try:  # la librería de audio tiene que venir en el .exe; la tarjeta de sonido puede no estar (CI)
+    try:  # the audio library must be inside the .exe; the sound card may be missing (CI)
         import numpy  # noqa: F401
         import sounddevice  # noqa: F401
         r["audio_library"] = True
     except Exception as e:
         r["audio_library"], r["audio_library_error"] = False, str(e)
-    r["audio"], r["audio_reason"] = player.audio_available()  # informativo
+    r["audio"], r["audio_reason"] = player.audio_available()  # informational
     Path(output).write_text(json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8")
     app.destroy()
 
 
 def main():
-    setup_bundled_ffmpeg()  # el .exe trae su propio FFmpeg
-    if "--prueba-arranque" in sys.argv:
-        i = sys.argv.index("--prueba-arranque")
-        output = sys.argv[i + 1] if len(sys.argv) > i + 1 else "prueba-arranque.json"
+    setup_bundled_ffmpeg()  # the .exe ships its own FFmpeg
+    if "--self-test" in sys.argv:
+        i = sys.argv.index("--self-test")
+        output = sys.argv[i + 1] if len(sys.argv) > i + 1 else "self-test.json"
         app = App()
         app.after(1500, lambda: self_test(app, output))
         app.mainloop()
     else:
         App().mainloop()
-    # Al cerrar la ventana, terminar del todo: alguna librería (p. ej. la de la bandeja) puede
-    # dejar un hilo vivo que mantendría el proceso abierto sin ventana.
+    # When the window closes, exit completely: some library (e.g. the tray's) may
+    # leave a thread alive that would keep the process open without a window.
     logging.shutdown()
     os._exit(0)
 

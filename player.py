@@ -1,39 +1,37 @@
 """
-Mini reproductor de AUDYAX.
+AUDYAX mini player.
 
-Archivo aparte a propósito: es la base de la "parte 2" del proyecto (un reproductor de
-música completo). Tiene dos piezas independientes:
+A separate file on purpose: it's the base of the project's "part 2" (a full music
+player). It has two independent pieces:
 
-  MotorAudio        reproduce cualquier formato que entienda FFmpeg (MP3, M4A, Opus…):
-                    FFmpeg decodifica a audio "crudo" (PCM) y sounddevice lo manda a los
-                    parlantes. No sabe nada de la interfaz.
-  BarraReproductor  la barra que se muestra en la ventana (customtkinter): portada, título,
-                    línea de la letra sincronizada, anterior / reproducir-pausar / siguiente,
-                    barra de progreso para adelantar, volumen.
+  AudioEngine  plays any format FFmpeg understands (MP3, M4A, Opus…):
+               FFmpeg decodes to "raw" audio (PCM) and sounddevice sends it to the
+               speakers. It knows nothing about the UI.
+  PlayerBar    the bar shown in the window (customtkinter): cover, title,
+               synced lyrics line, previous / play-pause / next,
+               progress bar for seeking, volume.
 
-    pip install sounddevice numpy      (en Linux además: sudo apt install libportaudio2)
+    pip install sounddevice numpy      (on Linux also: sudo apt install libportaudio2)
 """
-import os
 import shutil
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
-SAMPLE_RATE = 44100          # muestras por segundo
+SAMPLE_RATE = 44100          # samples per second
 CHANNELS = 2
-BYTES_PER_FRAME = 2 * CHANNELS   # int16 estéreo
+BYTES_PER_FRAME = 2 * CHANNELS   # int16 stereo
 FRAMES_PER_BLOCK = 2048
-MAX_BUFFER = SAMPLE_RATE * BYTES_PER_FRAME * 2   # ~2 s de audio decodificado por adelantado
+MAX_BUFFER = SAMPLE_RATE * BYTES_PER_FRAME * 2   # ~2 s of audio decoded ahead
 
 
 class StopPlayback(Exception):
-    """La lanza el motor dentro del callback cuando se acabó la canción."""
+    """Raised by the engine inside the callback when the song is over."""
 
 
 def audio_available() -> tuple:
-    """(True, "") si se puede reproducir; si no, (False, motivo para mostrar)."""
+    """(True, "") if playback is possible; otherwise (False, reason to show)."""
     try:
         import numpy  # noqa: F401
     except ImportError:
@@ -42,9 +40,9 @@ def audio_available() -> tuple:
         import sounddevice as sd
     except ImportError:
         return False, "falta la librería sounddevice (pip install sounddevice)"
-    except OSError as e:  # Linux sin PortAudio
+    except OSError as e:  # Linux without PortAudio
         return False, f"falta PortAudio ({e}). En Linux: sudo apt install libportaudio2"
-    except Exception as e:  # PortAudioError: PortAudio no arranca (p. ej. sin servidor de sonido)
+    except Exception as e:  # PortAudioError: PortAudio doesn't start (e.g. no sound server)
         return False, f"no se pudo iniciar el audio ({e})"
     try:
         if sd.default.device[1] is None or sd.default.device[1] < 0:
@@ -68,7 +66,7 @@ def audio_duration(path) -> float:
 
 
 class SounddeviceOutput:
-    """Salida real a los parlantes."""
+    """Real output to the speakers."""
 
     def __init__(self, callback, on_finish):
         import sounddevice as sd
@@ -79,8 +77,8 @@ class SounddeviceOutput:
             except StopPlayback:
                 raise sd.CallbackStop
 
-        # latency=0.1: sin esto, algunos sistemas (p. ej. PulseAudio) piden el audio en bloques
-        # de ~1 s y la barra de progreso avanza a saltos; 0,1 s sigue siendo seguro en equipos lentos
+        # latency=0.1: without it, some systems (e.g. PulseAudio) request audio in blocks
+        # of ~1 s and the progress bar moves in jumps; 0.1 s is still safe on slow computers
         self.stream = sd.RawOutputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype="int16",
                                          blocksize=FRAMES_PER_BLOCK, callback=cb, latency=0.1,
                                          finished_callback=on_finish)
@@ -97,23 +95,23 @@ class SounddeviceOutput:
 
 
 class AudioEngine:
-    """Reproduce un archivo. Métodos: reproducir(ruta, desde), pausar(), reanudar(),
-    alternar(), buscar(seg), detener(); propiedades: posicion, duracion, volumen, estado.
+    """Plays a file. Methods: play(path, start_at), pause_playback(), resume(),
+    toggle(), seek(sec), stop(); properties: position, duration, volume, status.
 
-    al_terminar() se llama (desde el hilo de audio) cuando la canción termina sola."""
+    on_finish() is called (from the audio thread) when the song ends by itself."""
 
     def __init__(self, on_finish=None, output_factory=SounddeviceOutput):
         self.on_finish = on_finish
         self._factory = output_factory
         self._volume = 1.0
         self.path, self.duration = None, 0.0
-        self.status = "stopped"           # "reproduciendo" | "pausado" | "detenido"
+        self.status = "stopped"           # "playing" | "paused" | "stopped"
         self._offset, self._frames = 0.0, 0
         self._output, self._process = None, None
         self._buffer = bytearray()
         self._cond = threading.Condition()
         self._end_of_stream = False
-        self._generation = 0              # cada arranque invalida los hilos del anterior
+        self._generation = 0              # each start invalidates the previous one's threads
         self._paused = False
 
     # ---------------------------------------------------------------- control
@@ -137,8 +135,8 @@ class AudioEngine:
     def toggle(self):
         self.pause_playback() if self.status == "playing" else self.resume()
 
-    def search(self, seconds: float):
-        """Salta a otra parte de la canción (se vuelve a decodificar desde ahí)."""
+    def seek(self, seconds: float):
+        """Jumps to another part of the song (decoding starts again from there)."""
         if not self.path:
             return
         seconds = max(0.0, min(seconds, max(0.0, self.duration - 0.5) if self.duration else seconds))
@@ -165,7 +163,7 @@ class AudioEngine:
     def volume(self, value: float):
         self._volume = max(0.0, min(1.0, float(value)))
 
-    # ---------------------------------------------------------------- interno
+    # ---------------------------------------------------------------- internals
     def _start(self, start_at: float):
         self._generation += 1
         gen = self._generation
@@ -179,8 +177,8 @@ class AudioEngine:
              "-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE), "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **extra)
         threading.Thread(target=self._read, args=(gen, self._process), daemon=True).start()
-        # Esperar a tener algo decodificado antes de abrir el audio (máx. 1 s): si no, los
-        # primeros bloques que pide la tarjeta de sonido salen en silencio
+        # Wait until something is decoded before opening the audio (max 1 s): otherwise the
+        # first blocks the sound card asks for come out silent
         with self._cond:
             self._cond.wait_for(lambda: len(self._buffer) >= SAMPLE_RATE * BYTES_PER_FRAME // 5
                                 or self._end_of_stream or gen != self._generation, timeout=1.0)
@@ -190,7 +188,7 @@ class AudioEngine:
         self._output.start()
 
     def _read(self, gen, process):
-        """Hilo: lee el audio decodificado de FFmpeg hasta tener ~2 s por adelantado."""
+        """Thread: reads FFmpeg's decoded audio until ~2 s are buffered ahead."""
         try:
             while True:
                 chunk = process.stdout.read(16384)
@@ -211,7 +209,7 @@ class AudioEngine:
                     self._end_of_stream = True
 
     def _refill(self, gen, output, frames: int):
-        """Callback de audio: entrega `cuadros` de audio (o silencio si está en pausa)."""
+        """Audio callback: delivers `frames` of audio (or silence while paused)."""
         required = frames * BYTES_PER_FRAME
         if gen != self._generation:
             raise StopPlayback
@@ -237,7 +235,7 @@ class AudioEngine:
 
     def _finished(self, gen):
         if gen != self._generation:
-            return  # se cerró a propósito (detener / buscar): no es "fin de la canción"
+            return  # closed on purpose (stop / seek): it's not the "end of the song"
         self.status = "stopped"
         if self.on_finish:
             self.on_finish()
@@ -260,12 +258,12 @@ class AudioEngine:
 
 
 # ==============================================================================
-# INTERFAZ: barra del mini reproductor
+# UI: mini player bar
 # ==============================================================================
 try:
     import customtkinter as ctk
     from PIL import Image, ImageDraw
-except ImportError:  # el motor se puede usar sin interfaz
+except ImportError:  # the engine can be used without a UI
     ctk = None
 
 
@@ -304,7 +302,7 @@ def _draw(name: str, color: str, n: int = 64) -> "Image.Image":
 
 
 def _icon(name: str, colors, size: int):
-    """Icono con versión clara y oscura (colores = (claro, oscuro))."""
+    """Icon with a light and a dark version (colors = (light, dark))."""
     light, dark = colors if isinstance(colors, (tuple, list)) else (colors, colors)
     return ctk.CTkImage(light_image=_draw(name, light).resize((size * 2, size * 2), Image.LANCZOS),
                         dark_image=_draw(name, dark).resize((size * 2, size * 2), Image.LANCZOS),
@@ -312,14 +310,14 @@ def _icon(name: str, colors, size: int):
 
 
 class PlayerBar(ctk.CTkFrame if ctk else object):
-    """Barra del mini reproductor. La ventana le pasa:
-      colores: dict con "card", "texto", "suave", "acento", "acento_hover", "sobre_acento", "hover"
-               (cada uno (claro, oscuro), como usa customtkinter);
-      fuentes: dict con "neg", "norm", "peq" (CTkFont);
-      vecina(item, paso) -> el item siguiente (paso=1) o anterior (paso=-1) de la lista, o None;
-      al_cambiar_volumen(v) -> para recordar el volumen;
-      al_cerrar() -> la ventana esconde la barra.
-    Un "item" es un dict con: id, ruta, titulo, artista y, opcional, imagen (PIL.Image)."""
+    """Mini player bar. The window passes it:
+      colors: dict with "card", "text", "muted", "accent", "accent_hover", "on_accent", "hover"
+              (each one (light, dark), as customtkinter uses);
+      fonts: dict with "bold", "normal", "small" (CTkFont);
+      neighbor(item, step) -> the next (step=1) or previous (step=-1) item in the list, or None;
+      on_volume_change(v) -> to remember the volume;
+      on_close() -> the window hides the bar.
+    An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
                  volume=0.8, engine=None):
@@ -336,7 +334,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self._build()
         self.after(250, self._refresh)
 
-    # ---------------------------------------------------------------- construcción
+    # ---------------------------------------------------------------- building
     def _button(self, parent, name, command, size=18, accent=False):
         c = self.colors
         return ctk.CTkButton(parent, text="", width=size + 18, height=size + 14, corner_radius=(size + 14) // 2,
@@ -389,9 +387,9 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.s_volume.pack(side="left")
         self._button(self, "close", self.close, 12).grid(row=0, column=5, rowspan=2, padx=(4, 10))
 
-    # ---------------------------------------------------------------- acciones
+    # ---------------------------------------------------------------- actions
     def play(self, item: dict):
-        """Empieza a sonar `item`. Lanza RuntimeError con el motivo si no se puede."""
+        """Starts playing `item`. Raises RuntimeError with the reason if it can't."""
         available, reason = audio_available() if self.engine._factory is SounddeviceOutput else (True, "")
         if not available:
             raise RuntimeError(reason)
@@ -421,11 +419,11 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.btn_play.configure(image=self.ico_pause if self.engine.status == "playing" else self.ico_play)
 
     def jump(self, step: int):
-        """Anterior (-1) o siguiente (1). "Anterior" pasados 3 s vuelve al inicio de la canción."""
+        """Previous (-1) or next (1). "Previous" after 3 s goes back to the start of the song."""
         if not self.item:
             return
         if step < 0 and self.engine.position > 3:
-            self.engine.search(0)
+            self.engine.seek(0)
             return
         another = self.neighbor(self.item, step)
         if another is None:
@@ -437,7 +435,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             self.play(another)
         except RuntimeError:
             self.item = another
-            self.jump(step)  # si ese archivo ya no existe, se pasa al siguiente
+            self.jump(step)  # if that file no longer exists, move on to the next one
 
     def close(self):
         self.engine.stop()
@@ -445,7 +443,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         if self.on_close:
             self.on_close()
 
-    # ---------------------------------------------------------------- refresco
+    # ---------------------------------------------------------------- refresh
     def _set_cover(self, image):
         if image is None:
             self.l_cover.configure(image=None)
@@ -465,7 +463,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
     def _release_bar(self, _event=None):
         self._dragging = False
         if self.item:
-            self.engine.search(float(self.bar.get()))
+            self.engine.seek(float(self.bar.get()))
 
     def _refresh(self):
         try:
@@ -473,7 +471,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                 return
         except Exception:
             return
-        if self._end_pending.is_set():   # la canción terminó sola: la siguiente
+        if self._end_pending.is_set():   # the song ended by itself: play the next one
             self._end_pending.clear()
             self.jump(1)
         if self.item:
@@ -494,5 +492,5 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
 
 
 def _short(text: str, n: int) -> str:
-    text = "".join(c if ord(c) <= 0xFFFF else "□" for c in str(text or ""))  # Tk no muestra emojis
+    text = "".join(c if ord(c) <= 0xFFFF else "□" for c in str(text or ""))  # Tk doesn't show emojis
     return text if len(text) <= n else text[: n - 1] + "…"

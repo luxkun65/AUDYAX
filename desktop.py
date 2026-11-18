@@ -1,10 +1,10 @@
 """
-Integración con el escritorio: icono en la bandeja del sistema y notificaciones.
+Desktop integration: system tray icon and notifications.
 
-Todo es opcional: si las librerías no están instaladas o el sistema no las soporta
-(por ejemplo, Linux sin bandeja), AUDYAX funciona igual, solo que sin estas funciones.
-Las librerías se cargan al usarlas por primera vez: pystray intenta conectarse al
-escritorio al importarse y, si no puede, lanza un error que no es ImportError.
+Everything is optional: if the libraries aren't installed or the system doesn't support them
+(for example, Linux without a tray), AUDYAX works the same, just without these features.
+The libraries are loaded on first use: pystray tries to connect to the desktop
+when imported and, if it can't, raises an error that isn't ImportError.
 
     pip install pystray plyer
 """
@@ -13,8 +13,8 @@ import sys
 import threading
 import time
 
-_pystray = None          # módulo pystray, una vez cargado
-_pystray_error = None    # por qué no se pudo cargar (texto), o None
+_pystray = None          # pystray module, once loaded
+_pystray_error = None    # why it couldn't be loaded (text), or None
 
 
 def _load_pystray():
@@ -23,9 +23,9 @@ def _load_pystray():
         try:
             import pystray
             _pystray = pystray
-        except Exception as e:  # ImportError, o sin escritorio/bandeja en este sistema
+        except Exception as e:  # ImportError, or no desktop/tray on this system
             _pystray_error = f"{type(e).__name__}: {e}"
-            # En Linux pystray prueba primero GTK/AppIndicator; si no están, se reintenta con X11
+            # On Linux pystray tries GTK/AppIndicator first; if they're missing, retry with X11
             if not sys.platform.startswith(("win", "darwin")) and not os.environ.get("PYSTRAY_BACKEND"):
                 for name in [m for m in sys.modules if m == "pystray" or m.startswith("pystray.")]:
                     del sys.modules[name]
@@ -56,11 +56,11 @@ def notifications_available() -> bool:
 
 
 class Tray:
-    """Icono de AUDYAX junto al reloj, con menú: Abrir, Pausar/Reanudar y Salir.
+    """AUDYAX icon next to the clock, with a menu: Abrir, Pausar/Reanudar and Salir.
 
-    Las funciones que se pasan (al_abrir, al_pausar, al_salir) se llaman desde el hilo de
-    la bandeja, NO desde el de la ventana: quien las pase debe reenviarlas a la ventana
-    (AUDYAX las mete en su cola de eventos)."""
+    The functions passed in (on_open, on_pause, on_quit) are called from the tray's
+    thread, NOT the window's: whoever passes them must forward them to the window
+    (AUDYAX puts them in its event queue)."""
 
     def __init__(self, image, on_open, on_pause, on_quit, is_paused):
         self.image = image
@@ -89,12 +89,12 @@ class Tray:
             )
             try:
                 icon = pystray.Icon("AUDYAX", self.image, text, menu)
-                # Hilo "daemon": si la librería se queda colgada, no impide cerrar AUDYAX
+                # "daemon" thread: if the library hangs, it doesn't prevent AUDYAX from closing
                 threading.Thread(target=icon.run, daemon=True, name="tray").start()
             except Exception:
                 return False
-            # Solo se da por bueno si el icono aparece de verdad. Si el sistema no tiene bandeja
-            # (algunos Linux), NO se debe esconder la ventana: no habría cómo volver a abrirla.
+            # Only accepted if the icon really appears. If the system has no tray
+            # (some Linux setups), the window must NOT be hidden: there'd be no way to reopen it.
             limit = time.monotonic() + 3
             while time.monotonic() < limit and not _anchored(icon):
                 time.sleep(0.05)
@@ -119,7 +119,7 @@ class Tray:
                 pass
 
     def notify(self, title: str, message: str) -> bool:
-        """Aviso desde el propio icono (Windows lo muestra como notificación)."""
+        """Notification from the icon itself (Windows shows it as a notification)."""
         if self.icon is None or not getattr(self.icon, "HAS_NOTIFICATION", False):
             return False
         try:
@@ -130,17 +130,17 @@ class Tray:
 
 
 def _anchored(icon) -> bool:
-    """El icono se ve de verdad. En Linux/X11 pystray lo marca 'visible' aunque no haya
-    bandeja donde ponerlo (lo deja pendiente); ahí se mira si encontró la bandeja."""
+    """The icon is really visible. On Linux/X11 pystray marks it 'visible' even when there's
+    no tray to put it in (it leaves it pending); there we check whether it found the tray."""
     if not icon.visible:
         return False
-    if hasattr(icon, "_systray_manager"):  # solo existe en el modo X11
+    if hasattr(icon, "_systray_manager"):  # only exists in X11 mode
         return bool(icon._systray_manager)
     return True
 
 
 def _stop_in_background(icon):
-    """icon.stop() puede tardar unos segundos en algunos sistemas: que no congele la ventana."""
+    """icon.stop() can take a few seconds on some systems: don't freeze the window."""
     def stop():
         try:
             icon.stop()
@@ -150,8 +150,8 @@ def _stop_in_background(icon):
 
 
 def notify(title: str, message: str, ico_icon: str = "") -> bool:
-    """Notificación del sistema (en Windows, el aviso de la esquina inferior derecha).
-    Devuelve False si no se pudo mostrar; nunca lanza excepciones."""
+    """System notification (on Windows, the popup in the bottom right corner).
+    Returns False if it couldn't be shown; never raises exceptions."""
     try:
         from plyer import notification
         kw = {"title": title[:63], "message": message[:255], "app_name": "AUDYAX", "timeout": 8}
@@ -164,7 +164,7 @@ def notify(title: str, message: str, ico_icon: str = "") -> bool:
 
 
 def batch_summary(downloaded: int, errors: int, skipped: int = 0) -> str:
-    """Texto de la notificación final, p. ej. '78 canciones descargadas · 2 con error'."""
+    """Text of the final notification, e.g. '78 canciones descargadas · 2 con error'."""
     parts = []
     if downloaded:
         parts.append(f"{downloaded} {'canción descargada' if downloaded == 1 else 'canciones descargadas'}")

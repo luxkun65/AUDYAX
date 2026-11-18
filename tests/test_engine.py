@@ -1,7 +1,7 @@
-"""Pruebas del motor de descarga (no necesitan internet).
+"""Download engine tests (no internet needed).
 
-Las que generan audio de prueba necesitan FFmpeg; si no está instalado se saltan.
-Ejecutar con:  python -m pytest
+The ones that generate test audio need FFmpeg; they are skipped if it isn't installed.
+Run with:  python -m pytest
 """
 import json
 import shutil
@@ -19,7 +19,7 @@ needs_mutagen = pytest.mark.skipif(not m.HAS_MUTAGEN, reason="mutagen no está i
 
 
 def make_audio(path: Path, volume_db: float = -20.0, seconds: int = 6):
-    """Crea un archivo de audio de prueba (un tono) con FFmpeg."""
+    """Creates a test audio file (a tone) with FFmpeg."""
     codecs = {".m4a": ["-c:a", "aac", "-b:a", "128k"], ".mp3": ["-c:a", "libmp3lame"],
               ".opus": ["-c:a", "libopus"]}
     subprocess.run(
@@ -30,7 +30,7 @@ def make_audio(path: Path, volume_db: float = -20.0, seconds: int = 6):
     return path
 
 
-# ------------------------------------------------------------------ funciones puras
+# ------------------------------------------------------------------ pure functions
 def test_tags_use_upload_year_without_release():
     d = m.tags({"title": "T", "artist": "A", "upload_date": "20190305",
                      "genres": ["Rock"], "webpage_url": "https://x"})
@@ -73,7 +73,7 @@ def test_relative_subfolder(tmp_path):
     assert m.relative_subfolder(Path("/otro/sitio"), tmp_path) == ""
 
 
-# ------------------------------------------------------------------ nombres de archivo
+# ------------------------------------------------------------------ file names
 def test_unique_name_without_conflict(tmp_path):
     assert m.unique_name(tmp_path, "Canción", "Artista") == "Canción"
     assert m.unique_name(tmp_path / "no_existe", "Canción", "Artista") == "Canción"
@@ -96,13 +96,13 @@ def test_unique_name_ignores_case(tmp_path):
     assert m.unique_name(tmp_path, "CANCIÓN", "X") == "CANCIÓN (X)"
 
 
-# ------------------------------------------------------------------ opciones y config
+# ------------------------------------------------------------------ options and config
 def test_build_options(tmp_path):
     cfg = dict(m.DEFAULT_CONFIG, normalize=True, audio_format="m4a")
-    op = m.build_options(cfg, tmp_path, tmp_path / "song_list", None, None, None)
-    assert "postprocessors" not in op  # se añaden con agregar_postprocesadores
+    op = m.build_options(cfg, tmp_path, tmp_path / "playlist", None, None, None)
+    assert "postprocessors" not in op  # added with add_postprocessors
     assert op["download_archive"] == str(tmp_path / "descargados.txt")
-    assert op["outtmpl"]["default"].startswith(str(tmp_path / "song_list"))
+    assert op["outtmpl"]["default"].startswith(str(tmp_path / "playlist"))
     assert "loudnorm" in " ".join(op["postprocessor_args"]["extractaudio+ffmpeg_o"])
 
     cfg["normalize"] = False
@@ -134,7 +134,7 @@ def test_ids_in_archive(tmp_path):
     assert m.ids_in_archive(tmp_path / "nada") == set()
 
 
-# ------------------------------------------------------------------ con FFmpeg
+# ------------------------------------------------------------------ with FFmpeg
 def _extract(path: Path, force: bool, normalize: bool):
     params = {"quiet": True}
     if normalize:
@@ -155,7 +155,7 @@ def test_m4a_without_normalization_is_copied_untouched(tmp_path):
 
 @needs_ffmpeg
 def test_normalized_m4a_changes_volume(tmp_path):
-    """Antes del arreglo la normalización se ignoraba en m4a (el audio se copiaba)."""
+    """Before the fix, normalization was ignored for m4a (the audio was copied)."""
     path = make_audio(tmp_path / "a.m4a", volume_db=-25)
     before = m.analyze_loudness(path)["lufs"]
     later = m.analyze_loudness(_extract(path, force=True, normalize=True))["lufs"]
@@ -178,7 +178,7 @@ def test_replaygain_and_track_number(tmp_path, ext):
     else:
         assert any("replaygain_track_gain" in k for k in tags)
         assert any("replaygain_album_gain" in k for k in tags)
-    m.strip_track_number(path)  # no debe fallar aunque no haya número de pista
+    m.strip_track_number(path)  # must not fail even without a track number
 
 
 def test_file_info_missing_file(tmp_path):

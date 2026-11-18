@@ -1,13 +1,13 @@
 """
-Letras de canciones: búsqueda en LRCLIB (https://lrclib.net), guardado como archivo .lrc
-junto a la canción y/o dentro del propio archivo de audio, y lectura para el reproductor.
+Song lyrics: lookup on LRCLIB (https://lrclib.net), saved as a .lrc file next to
+the song and/or inside the audio file itself, and reading for the player.
 
-LRCLIB es gratuito, no necesita clave y devuelve dos versiones de la letra:
-  - sincronizada ("syncedLyrics", formato LRC: "[01:23.45] línea"), que los reproductores
-    muestran al ritmo de la canción;
-  - texto plano ("plainLyrics").
+LRCLIB is free, needs no key and returns two versions of the lyrics:
+  - synced ("syncedLyrics", LRC format: "[01:23.45] line"), which players
+    show in time with the song;
+  - plain text ("plainLyrics").
 
-Este módulo no depende de la interfaz: lo usa el motor de descarga y lo usará el reproductor.
+This module doesn't depend on the UI: the download engine uses it and so will the player.
 """
 import json
 import re
@@ -20,9 +20,9 @@ from pathlib import Path
 
 URL_API = "https://lrclib.net/api"
 USER_AGENT = "AUDYAX (https://github.com/luxkun65/AUDYAX)"
-TOLERANCE_SECONDS = 3   # diferencia de duración aceptada al elegir entre resultados
+TOLERANCE_SECONDS = 3   # accepted duration difference when choosing among results
 
-# Qué hacer con las letras (Configuración → Descargas). "no" = no buscarlas.
+# What to do with lyrics (Settings → Letras y álbum). "off" = don't look them up.
 LYRICS_MODES = ("off", "lrc", "embedded", "both")
 
 try:
@@ -35,9 +35,9 @@ except ImportError:
 
 
 # ==============================================================================
-# BÚSQUEDA EN LRCLIB
+# LRCLIB LOOKUP
 # ==============================================================================
-breaker = CircuitBreaker()  # si LRCLIB falla varias veces seguidas, se deja un rato
+breaker = CircuitBreaker()  # if LRCLIB fails several times in a row, it is left alone for a while
 
 
 def _request(path: str, query_params: dict, timeout: int = 10, proxy: str = ""):
@@ -53,7 +53,7 @@ def _request(path: str, query_params: dict, timeout: int = 10, proxy: str = ""):
         breaker.success()
         return data
     except urllib.error.HTTPError as e:
-        breaker.success()  # el servicio respondió (aunque sea "no encontrado")
+        breaker.success()  # the service answered (even if it was "not found")
         if e.code == 404:
             return None
         raise
@@ -70,12 +70,12 @@ def _to_result(item: dict) -> dict:
 
 
 def find_lyrics(title: str, artist: str, album: str = "", duration=None, proxy: str = ""):
-    """Busca la letra de una canción. Devuelve un dict con 'sincronizada', 'texto' e
-    'instrumental', o None si no hay. Lanza la excepción si falla la conexión.
+    """Looks up a song's lyrics. Returns a dict with 'synced', 'text' and
+    'instrumental', or None if there are none. Raises the exception if the connection fails.
 
-    1) /api/get con título, artista, álbum y duración (coincidencia exacta, ±2 s).
-    2) Si no hay, /api/search con título y artista, y se elige el resultado de duración
-       más parecida (preferiendo los que traen letra sincronizada)."""
+    1) /api/get with title, artist, album and duration (exact match, ±2 s).
+    2) If nothing, /api/search with title and artist, choosing the result with the closest
+       duration (preferring the ones with synced lyrics)."""
     title, artist = (title or "").strip(), (artist or "").strip()
     if not title or not artist:
         return None
@@ -98,30 +98,30 @@ def find_lyrics(title: str, artist: str, album: str = "", duration=None, proxy: 
 
 
 def text_to_save(lyric: dict) -> str:
-    """La versión que se guarda: la sincronizada si existe (sirve en ambos casos: los
-    reproductores que no la entienden muestran las líneas igual), si no, la de texto."""
+    """The version that is saved: the synced one if it exists (it works either way:
+    players that don't understand it still show the lines), otherwise the plain text."""
     if not lyric:
         return ""
     return lyric.get("synced") or lyric.get("text") or ""
 
 
 # ==============================================================================
-# GUARDAR
+# SAVING
 # ==============================================================================
 def lrc_path(audio_path) -> Path:
     return Path(audio_path).with_suffix(".lrc")
 
 
 def save_lrc(audio_path, lyric: dict) -> Path:
-    """Escribe 'Canción.lrc' junto a 'Canción.mp3' (así lo buscan los reproductores)."""
+    """Writes 'Song.lrc' next to 'Song.mp3' (that's where players look for it)."""
     dest = lrc_path(audio_path)
     dest.write_text(text_to_save(lyric) + "\n", encoding="utf-8")
     return dest
 
 
 def embed_lyrics(audio_path, lyric: dict) -> bool:
-    """Guarda la letra dentro del archivo: USLT (MP3), ©lyr (M4A) o LYRICS (Opus).
-    Devuelve False si el formato no lo admite."""
+    """Saves the lyrics inside the file: USLT (MP3), ©lyr (M4A) or LYRICS (Opus).
+    Returns False if the format doesn't support it."""
     text = text_to_save(lyric)
     if not HAS_MUTAGEN or not text:
         return False
@@ -151,7 +151,7 @@ def embed_lyrics(audio_path, lyric: dict) -> bool:
 
 
 def save_lyrics(audio_path, lyric: dict, mode: str) -> list:
-    """Guarda según el modo de la configuración. Devuelve dónde quedó ("lrc", "incrustada")."""
+    """Saves according to the settings mode. Returns where they ended up ("lrc", "embedded")."""
     done = []
     if not lyric or not text_to_save(lyric) or mode not in LYRICS_MODES or mode == "off":
         return done
@@ -164,10 +164,10 @@ def save_lyrics(audio_path, lyric: dict, mode: str) -> list:
 
 
 # ==============================================================================
-# LEER (para el reproductor)
+# READING (for the player)
 # ==============================================================================
 def read_lyrics(audio_path) -> str:
-    """Letra de una canción ya descargada: primero el .lrc de al lado, si no, la incrustada."""
+    """Lyrics of a downloaded song: first the .lrc next to it, otherwise the embedded ones."""
     lrc = lrc_path(audio_path)
     if lrc.is_file():
         try:
@@ -197,9 +197,9 @@ _TIME_RE = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 
 
 def parse_lrc(text: str) -> list:
-    """Convierte una letra LRC en [(segundos, línea), ...] ordenada. Una línea puede tener
-    varias marcas de tiempo ("[00:10.00][01:20.00] estribillo"). Las etiquetas como [ar:…]
-    se ignoran. Si la letra no está sincronizada, devuelve []."""
+    """Turns LRC lyrics into a sorted [(seconds, line), ...]. A line can have several
+    timestamps ("[00:10.00][01:20.00] chorus"). Tags like [ar:…] are ignored.
+    If the lyrics aren't synced, returns []."""
     lines = []
     for raw in (text or "").splitlines():
         marks = list(_TIME_RE.finditer(raw))
@@ -215,7 +215,7 @@ def parse_lrc(text: str) -> list:
 
 
 def current_line(lines: list, seconds: float) -> int:
-    """Índice de la línea que corresponde al momento dado (-1 antes de la primera)."""
+    """Index of the line for the given moment (-1 before the first one)."""
     current = -1
     for i, (t, _) in enumerate(lines):
         if t <= seconds + 0.05:

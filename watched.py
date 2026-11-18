@@ -1,13 +1,13 @@
 """
-Playlists vigiladas: se guardan playlists (de YouTube o YouTube Music) y se revisa si tienen
-canciones nuevas, para bajar solo esas.
+Watched playlists: playlists (from YouTube or YouTube Music) are saved and checked for
+new songs, to download only those.
 
-La base es descargados.txt: cada carpeta de descargas guarda ahí los ids de lo que ya se bajó,
-así que "nuevas" son las de la playlist que no están en ese archivo.
+It is based on descargados.txt: each download folder keeps the ids of what was already
+downloaded there, so "new" songs are the playlist's songs that aren't in that file.
 
-Se guardan dentro de la configuración de AUDYAX (clave "vigiladas"), como una lista de:
-    {"url", "nombre", "carpeta", "agregada", "ultima_revision", "total", "nuevas", "error"}
-Este módulo no depende de la interfaz.
+They are stored inside AUDYAX's settings (key "watched"), as a list of:
+    {"url", "name", "folder", "added", "last_check", "total", "new_count", "error"}
+This module doesn't depend on the UI.
 """
 import urllib.parse
 from datetime import datetime
@@ -17,29 +17,29 @@ import engine as engine
 
 
 def is_playlist(url: str) -> bool:
-    """¿El enlace es de una playlist (o álbum)? Las "radios" automáticas (list=RD…) no cuentan:
-    cambian cada vez y no tiene sentido vigilarlas."""
+    """Is the link a playlist (or album)? Automatic "radios" (list=RD…) don't count:
+    they change every time and watching them makes no sense."""
     parts = urllib.parse.urlsplit((url or "").strip())
     if "youtube.com" not in parts.netloc and "youtu.be" not in parts.netloc:
         return False
     if parts.path.startswith("/browse/MPRE"):
         return True
-    song_list = (urllib.parse.parse_qs(parts.query).get("list") or [""])[0]
-    return bool(song_list) and not song_list.startswith("RD")
+    list_id = (urllib.parse.parse_qs(parts.query).get("list") or [""])[0]
+    return bool(list_id) and not list_id.startswith("RD")
 
 
 def playlist_url(url: str) -> str:
-    """Forma canónica para guardarla y comparar: solo la playlist (sin la canción en la que
-    estaba el usuario al copiarla)."""
+    """Canonical form for saving and comparing: only the playlist (without the song the
+    user was on when copying it)."""
     parts = urllib.parse.urlsplit(url.strip())
     if parts.path.startswith("/browse/"):
         return f"https://{parts.netloc}{parts.path}"
-    song_list = urllib.parse.parse_qs(parts.query)["list"][0]
+    list_id = urllib.parse.parse_qs(parts.query)["list"][0]
     host = "music.youtube.com" if parts.netloc.startswith("music.") else "www.youtube.com"
-    return f"https://{host}/playlist?list={song_list}"
+    return f"https://{host}/playlist?list={list_id}"
 
 
-def new_item(url: str, folder: str, name: str = "") -> dict:
+def create(url: str, folder: str, name: str = "") -> dict:
     if not is_playlist(url):
         raise ValueError("Ese enlace no es de una playlist de YouTube o YouTube Music.")
     return {"url": playlist_url(url), "name": name or "", "folder": str(folder),
@@ -47,24 +47,24 @@ def new_item(url: str, folder: str, name: str = "") -> dict:
             "total": 0, "new_count": 0, "error": ""}
 
 
-def add(song_list: list, url: str, folder: str, name: str = "") -> dict:
-    """Agrega una playlist (si ya estaba, devuelve la existente). Modifica `lista`."""
-    v = new_item(url, folder, name)
-    for existing in song_list:
+def add(watch_list: list, url: str, folder: str, name: str = "") -> dict:
+    """Adds a playlist (if it was already there, returns the existing one). Modifies `watch_list`."""
+    v = create(url, folder, name)
+    for existing in watch_list:
         if existing["url"] == v["url"]:
             return existing
-    song_list.append(v)
+    watch_list.append(v)
     return v
 
 
-def remove(song_list: list, url: str):
-    song_list[:] = [v for v in song_list if v["url"] != url]
+def remove(watch_list: list, url: str):
+    watch_list[:] = [v for v in watch_list if v["url"] != url]
 
 
 def check(watched_item: dict, net=None) -> list:
-    """Consulta la playlist y devuelve las canciones que aún no se bajaron a su carpeta.
-    Actualiza en `vigilada` el nombre, el total, cuántas nuevas hay y la fecha de revisión.
-    Si falla, guarda el motivo en vigilada["error"] y devuelve []."""
+    """Fetches the playlist and returns the songs not yet downloaded to its folder.
+    Updates the name, the total, how many are new and the check date in `item`.
+    If it fails, stores the reason in item["error"] and returns []."""
     folder = Path(watched_item["folder"])
     watched_item["last_check"] = datetime.now().isoformat(timespec="seconds")
     try:
@@ -84,7 +84,7 @@ def check(watched_item: dict, net=None) -> list:
 
 
 def check_summary(watched_item: dict) -> str:
-    """Resumen para la lista: "25 canciones · 3 nuevas · revisada hace 2 h"."""
+    """Summary for the list: "25 canciones · 3 nuevas · revisada hace 2 h"."""
     if watched_item.get("error"):
         return "No se pudo revisar: " + watched_item["error"]
     if not watched_item.get("last_check"):

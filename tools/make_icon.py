@@ -1,7 +1,7 @@
-"""Genera assets/audyax.ico (ejecutable de Windows) y assets/audyax.png (ventana y bandeja)
-a partir del mismo dibujo de nota musical que usa la interfaz.
+"""Generates assets/audyax.ico (Windows executable) and assets/audyax.png (window and tray)
+from the same music note drawing the UI uses.
 
-    python tools/generar_icono.py
+    python tools/make_icon.py
 """
 import sys
 from pathlib import Path

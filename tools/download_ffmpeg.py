@@ -1,12 +1,12 @@
 """
-Descarga FFmpeg para Windows (compilación LGPL "shared" de BtbN/FFmpeg-Builds) a vendor/ffmpeg,
-para incluirlo en el ejecutable con build.py.
+Downloads FFmpeg for Windows (BtbN/FFmpeg-Builds LGPL "shared" build) to vendor/ffmpeg,
+to include it in the executable with build.py.
 
-    python tools/descargar_ffmpeg.py
+    python tools/download_ffmpeg.py
 
-Se usa la versión LGPL porque se puede redistribuir junto a AUDYAX (licencia MIT) siempre que
-se incluya su licencia, que se copia junto a los ejecutables. Incluye libmp3lame y libopus,
-que es lo que AUDYAX necesita para MP3 y Opus.
+The LGPL version is used because it can be redistributed with AUDYAX (MIT license) as long
+as its license is included, which is copied next to the executables. It includes libmp3lame
+and libopus, which is what AUDYAX needs for MP3 and Opus.
 """
 import io
 import shutil
@@ -32,7 +32,7 @@ def main():
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for name in z.namelist():
             path = Path(name)
-            # bin/ffmpeg.exe, bin/ffprobe.exe, bin/*.dll y la licencia
+            # bin/ffmpeg.exe, bin/ffprobe.exe, bin/*.dll and the license
             if (path.parent.name == "bin" and (path.stem in ("ffmpeg", "ffprobe") or path.suffix == ".dll")) \
                     or path.name.upper().startswith("LICENSE"):
                 (TARGET_DIR / path.name).write_bytes(z.read(name))

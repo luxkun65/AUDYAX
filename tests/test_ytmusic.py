@@ -1,26 +1,25 @@
-"""Playlists de YouTube Music: versiones sustituidas y enlaces de "radio"."""
-from pathlib import Path
+"""YouTube Music playlists: substituted versions and "radio" links."""
 
 import pytest
 
 import engine as m
 
 
-# ------------------------------------------------------------------ limpiar_url
+# ------------------------------------------------------------------ clean_url
 @pytest.mark.parametrize("entry, expected", [
-    # Radio automática de YouTube Music: solo la canción
+    # YouTube Music automatic radio: just the song
     ("https://music.youtube.com/watch?v=bDybRgaVD2Y&list=RDAMVMbDybRgaVD2Y",
      "https://www.youtube.com/watch?v=bDybRgaVD2Y"),
     ("https://www.youtube.com/watch?v=abc&list=RDabc&start_radio=1",
      "https://www.youtube.com/watch?v=abc"),
-    # Canción suelta de YouTube Music -> www
+    # Single YouTube Music song -> www
     ("https://music.youtube.com/watch?v=bDybRgaVD2Y", "https://www.youtube.com/watch?v=bDybRgaVD2Y"),
     ("https://music.youtube.com/watch?v=bDybRgaVD2Y&si=xyz", "https://www.youtube.com/watch?v=bDybRgaVD2Y"),
-    # Canción dentro de una playlist real: se mantiene la playlist
+    # Song inside a real playlist: the playlist is kept
     ("https://www.youtube.com/watch?v=abc&list=PL123&index=3",
      "https://www.youtube.com/watch?v=abc&list=PL123"),
     ("https://music.youtube.com/watch?v=abc&list=PL123", "https://music.youtube.com/watch?v=abc&list=PL123"),
-    # Otras cosas no se tocan
+    # Other things are left untouched
     ("https://music.youtube.com/playlist?list=PL123", "https://music.youtube.com/playlist?list=PL123"),
     ("https://youtu.be/abc", "https://youtu.be/abc"),
     ("https://example.com/watch?v=abc", "https://example.com/watch?v=abc"),
@@ -42,9 +41,9 @@ def test_is_ytmusic_playlist(url, expected):
     assert m.is_ytmusic_playlist(url) is expected
 
 
-# ------------------------------------------------------------------ pistas_ytmusic
+# ------------------------------------------------------------------ ytmusic_tracks
 class FakeClient:
-    """Imita las respuestas de ytmusicapi (YTMusic.get_playlist / get_album)."""
+    """Mimics ytmusicapi's responses (YTMusic.get_playlist / get_album)."""
 
     def __init__(self):
         self.requests_made = []
@@ -52,7 +51,7 @@ class FakeClient:
     def get_playlist(self, playlist_id, limit=100):
         self.requests_made.append(("playlist", playlist_id, limit))
         return {"title": "Mi Playlist", "tracks": [
-            # YouTube Music reproduce bDybRgaVD2Y aunque la playlist guarda QQD-OvbCfCU
+            # YouTube Music plays bDybRgaVD2Y although the playlist stores QQD-OvbCfCU
             {"videoId": "bDybRgaVD2Y", "title": "Canción", "isAvailable": True,
              "artists": [{"name": "Artista A"}, {"name": "Artista B"}],
              "album": {"name": "Disco", "id": "MPRE1"},
@@ -73,7 +72,7 @@ class FakeClient:
 def test_ytmusic_tracks_use_version_youtube_music_plays():
     client = FakeClient()
     title, tracks = m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL123&si=x", client)
-    assert client.requests_made == [("playlist", "PL123", None)]  # None = todas las canciones
+    assert client.requests_made == [("playlist", "PL123", None)]  # None = all songs
     assert title == "Mi Playlist"
     assert [p["id"] for p in tracks] == ["bDybRgaVD2Y", "gris0000001"]
     assert tracks[0] == {
@@ -95,7 +94,7 @@ def test_ytmusic_tracks_without_library(monkeypatch):
     assert m.ytmusic_tracks("https://music.youtube.com/playlist?list=PL1") is None
 
 
-# ------------------------------------------------------------------ resolver
+# ------------------------------------------------------------------ resolve
 def test_resolve_ytmusic_playlist(tmp_path, monkeypatch):
     real = m.ytmusic_tracks
     monkeypatch.setattr(m, "ytmusic_tracks", lambda url, **kw: real(url, FakeClient()))
@@ -108,7 +107,7 @@ def test_resolve_ytmusic_playlist(tmp_path, monkeypatch):
                                              "album": "Disco"}
     assert plan["default_album"] == "Mi Playlist"
 
-    # Al reintentar dentro de la playlist se respeta la subcarpeta indicada
+    # When retrying inside the playlist, the given subfolder is respected
     assert m.resolve("https://music.youtube.com/playlist?list=PL123", tmp_path,
                       "Otra")["dest"] == tmp_path / "Otra"
 
@@ -131,7 +130,7 @@ def test_resolve_drops_radio(tmp_path, monkeypatch):
     assert views == plan["urls"] == ["https://www.youtube.com/watch?v=abc"]
 
 
-# ------------------------------------------------------------------ LimpiarMetadata
+# ------------------------------------------------------------------ CleanMetadata
 def test_clean_metadata_uses_youtube_music_data(tmp_path):
     events = []
     pp = m.CleanMetadata(None, tmp_path, events.append, _NeverCancelled(),

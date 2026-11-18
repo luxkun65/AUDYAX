@@ -1,22 +1,22 @@
 """
-Genera AUDYAX listo para usar sin Python, con PyInstaller.
+Builds AUDYAX ready to use without Python, with PyInstaller.
 
     pip install -r requirements-dev.txt
-    python tools/descargar_ffmpeg.py      # (Windows) baja FFmpeg a vendor/ffmpeg
+    python tools/download_ffmpeg.py       # (Windows) downloads FFmpeg to vendor/ffmpeg
     python build.py --zip
 
-Resultado:
-    dist/AUDYAX/                 carpeta del programa: AUDYAX.exe + _internal/ + ffmpeg/
-    dist/AUDYAX-<versión>-<sistema>.zip   (con --zip) lo que se publica en GitHub Releases
+Result:
+    dist/AUDYAX/                 program folder: AUDYAX.exe + _internal/ + ffmpeg/
+    dist/AUDYAX-<version>-<system>.zip    (with --zip) what is published on GitHub Releases
 
-Se genera una CARPETA y no un solo .exe: FFmpeg pesa >100 MB y, dentro de un único .exe,
-habría que descomprimirlo en cada arranque (el programa tardaría en abrir).
-Hay que generarlo en el mismo sistema operativo en el que se va a usar.
+A FOLDER is built instead of a single .exe: FFmpeg weighs >100 MB and, inside a single .exe,
+it would have to be unpacked on every start (the program would be slow to open).
+It must be built on the same operating system it will be used on.
 
-Opciones:
-    --ffmpeg CARPETA   carpeta con ffmpeg(.exe), ffprobe(.exe) y sus DLL a incluir
-                       (por defecto vendor/ffmpeg si existe; si no, se avisa y no se incluye)
-    --zip              comprime la carpeta para publicarla
+Options:
+    --ffmpeg FOLDER    folder with ffmpeg(.exe), ffprobe(.exe) and their DLLs to include
+                       (vendor/ffmpeg by default if it exists; otherwise a warning and it's left out)
+    --zip              compresses the folder for publishing
 """
 import argparse
 import os
@@ -34,29 +34,29 @@ IS_WINDOWS = sys.platform.startswith("win")
 
 
 def pyinstaller_args() -> list:
-    sep = os.pathsep  # ';' en Windows, ':' en Linux/macOS (formato de --add-data)
+    sep = os.pathsep  # ';' on Windows, ':' on Linux/macOS (--add-data format)
     args = [
         str(ROOT / "descargador_gui.py"),
         "--name", "AUDYAX",
         "--onedir",
-        "--windowed",                              # sin ventana de consola
+        "--windowed",                              # no console window
         "--icon", str(ROOT / "assets" / "audyax.ico"),
-        "--add-data", f"{ROOT / 'assets'}{sep}assets",  # iconos de la ventana y la bandeja
-        "--collect-data", "customtkinter",         # temas y fuentes de customtkinter
-        "--hidden-import", "PIL._tkinter_finder",  # Pillow + tkinter (si falta, no abre)
-        "--collect-all", "tkinterdnd2",            # librería nativa de arrastrar y soltar
-        "--collect-data", "ytmusicapi",            # traducciones que ytmusicapi carga al iniciar
-        "--collect-submodules", "pystray",         # la bandeja elige su módulo al arrancar
+        "--add-data", f"{ROOT / 'assets'}{sep}assets",  # window and tray icons
+        "--collect-data", "customtkinter",         # customtkinter themes and fonts
+        "--hidden-import", "PIL._tkinter_finder",  # Pillow + tkinter (without it, it doesn't open)
+        "--collect-all", "tkinterdnd2",            # native drag and drop library
+        "--collect-data", "ytmusicapi",            # translations ytmusicapi loads on startup
+        "--collect-submodules", "pystray",         # the tray picks its module on startup
         "--distpath", str(ROOT / "dist"),
         "--workpath", str(ROOT / "build"),
         "--specpath", str(ROOT / "build"),
         "--noconfirm",
         "--clean",
     ]
-    # sounddevice trae PortAudio (la salida de audio del mini reproductor) en _sounddevice_data
+    # sounddevice ships PortAudio (the mini player's audio output) in _sounddevice_data
     if IS_WINDOWS or sys.platform == "darwin":
         args += ["--collect-data", "_sounddevice_data", "--collect-binaries", "_sounddevice_data"]
-    # plyer también elige su módulo de notificaciones al arrancar, según el sistema
+    # plyer also picks its notification module on startup, depending on the system
     if IS_WINDOWS:
         args += ["--hidden-import", "plyer.platforms.win.notification",
                  "--hidden-import", "plyer.platforms.win.libs.balloontip"]
@@ -74,7 +74,7 @@ def copy_ffmpeg(source: Path, dest: Path) -> bool:
         return False
     dest.mkdir(parents=True, exist_ok=True)
     for file in source.iterdir():
-        # ffmpeg, ffprobe, sus DLL (compilación "shared") y la licencia de FFmpeg
+        # ffmpeg, ffprobe, their DLLs ("shared" build) and FFmpeg's license
         if file.is_file() and (file.stem in ("ffmpeg", "ffprobe") or file.suffix.lower() == ".dll"
                                   or file.name.upper().startswith("LICENSE")):
             shutil.copy2(file, dest / file.name)

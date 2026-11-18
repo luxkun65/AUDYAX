@@ -1,5 +1,5 @@
-"""Opciones avanzadas (velocidad, proxy, cookies), versión de la app, FFmpeg incluido,
-notificaciones y bandeja."""
+"""Advanced options (speed, proxy, cookies), app version, bundled FFmpeg,
+notifications and tray."""
 import json
 import os
 import sys
@@ -13,7 +13,7 @@ import engine as m
 from test_engine import needs_ffmpeg
 
 
-# ------------------------------------------------------------------ opciones avanzadas
+# ------------------------------------------------------------------ advanced options
 def test_advanced_options_off_by_default():
     cfg = m.DEFAULT_CONFIG
     assert not cfg["speed_limit_enabled"] and not cfg["proxy_enabled"] and not cfg["cookies_enabled"]
@@ -24,13 +24,13 @@ def test_advanced_options_off_by_default():
 def test_speed_limit_is_split():
     cfg = dict(m.DEFAULT_CONFIG, speed_limit_enabled=True, speed_limit_mb=3,
                parallel_downloads=3)
-    assert m.network_options(cfg)["ratelimit"] == 1024 * 1024  # 3 MB/s entre 3 descargas
-    cfg["speed_limit_mb"] = "1,5"  # coma decimal, como se escribe en español
+    assert m.network_options(cfg)["ratelimit"] == 1024 * 1024  # 3 MB/s among 3 downloads
+    cfg["speed_limit_mb"] = "1,5"  # decimal comma, as written in Spanish
     cfg["parallel_downloads"] = 1
     assert m.network_options(cfg)["ratelimit"] == int(1.5 * 1024 * 1024)
     cfg["speed_limit_mb"] = "abc"
     assert "ratelimit" not in m.network_options(cfg)
-    cfg["speed_limit_mb"] = 0.001  # nunca menos de 32 KB/s
+    cfg["speed_limit_mb"] = 0.001  # never less than 32 KB/s
     assert m.network_options(cfg)["ratelimit"] == 32 * 1024
 
 
@@ -49,14 +49,14 @@ def test_proxy(proxy, is_valid):
 
 def test_cookies(tmp_path):
     cfg = dict(m.DEFAULT_CONFIG, cookies_enabled=True)
-    assert m.network_options(cfg) == {}  # las cookies nunca van en las opciones generales
+    assert m.network_options(cfg) == {}  # cookies never go in the general options
     assert m.cookie_options(cfg) == {"cookiesfrombrowser": ("firefox",)}
     cfg["cookies_source"] = "edge"
     assert m.cookie_options(cfg) == {"cookiesfrombrowser": ("edge",)}
     cfg["cookies_source"] = "inventado"
     assert m.cookie_options(cfg) == {}
     cfg["cookies_source"] = "file"
-    assert m.cookie_options(cfg) == {}  # sin archivo elegido
+    assert m.cookie_options(cfg) == {}  # no file chosen
     file = tmp_path / "cookies.txt"
     file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
     cfg["cookies_file"] = str(file)
@@ -68,7 +68,7 @@ def test_cookies(tmp_path):
 @pytest.mark.parametrize("reason, is_age", [
     ("Sign in to confirm your age. This video may be inappropriate for some users.", True),
     ("This video is age-restricted and only available on YouTube", True),
-    ("Sign in to confirm you're not a bot", False),  # comprobación de bot: NO es por edad
+    ("Sign in to confirm you're not a bot", False),  # bot check: NOT age-related
     ("Video unavailable. This video is not available", False),
     ("Private video. Sign in if you've been granted access", False),
 ])
@@ -80,7 +80,7 @@ ID_AGE, ID_NORMAL, ID_OTHER = "edadEdad123", "normalNorm1", "otroOtro123"
 
 
 def _fake_youtube(monkeypatch, tmp_path, second_attempt_fails=False):
-    """YoutubeDL falso: ID_EDAD pide confirmar la edad si no lleva cookies; ID_OTRO no existe."""
+    """Fake YoutubeDL: ID_AGE asks to confirm age without cookies; ID_OTHER doesn't exist."""
     calls = []
 
     class Fake:
@@ -120,7 +120,7 @@ def _run(tmp_path, **cfg_extra):
     events = []
     cfg = dict(m.DEFAULT_CONFIG, folder=str(tmp_path), audio_format="mp3", replaygain=False,
                parallel_downloads=1, **cfg_extra)
-    m.run_job("song_list", cfg, events.append, threading.Event())
+    m.run_job("some-list", cfg, events.append, threading.Event())
     errors = {e[1]: e[2] for e in events if e[0] == "error"}
     return events, errors
 
@@ -128,9 +128,9 @@ def _run(tmp_path, **cfg_extra):
 def test_cookies_only_for_age_restriction(tmp_path, monkeypatch):
     calls = _fake_youtube(monkeypatch, tmp_path)
     events, errors = _run(tmp_path, cookies_enabled=True)
-    # Todas sin cookies; SOLO la de edad se reintenta con cookies; la que no existe no se reintenta
+    # All without cookies; ONLY the age-restricted one is retried with cookies; the missing one isn't retried
     assert calls == [(ID_NORMAL, False), (ID_AGE, False), (ID_OTHER, False), (ID_AGE, True)]
-    assert list(errors) == [ID_OTHER]  # la de edad no cuenta como error
+    assert list(errors) == [ID_OTHER]  # the age-restricted one doesn't count as an error
     assert ("status", ID_AGE, "Restricción de edad: usando tu sesión…") in events
     assert ID_AGE not in (tmp_path / "faltantes.txt").read_text(encoding="utf-8")
 
@@ -145,12 +145,12 @@ def test_cookies_disabled_are_not_used_and_explained(tmp_path, monkeypatch):
 def test_failure_with_cookies_is_an_error(tmp_path, monkeypatch):
     calls = _fake_youtube(monkeypatch, tmp_path, second_attempt_fails=True)
     events, errors = _run(tmp_path, cookies_enabled=True)
-    assert calls.count((ID_AGE, True)) == 1  # un solo reintento
+    assert calls.count((ID_AGE, True)) == 1  # a single retry
     assert ID_AGE in errors and len([e for e in events if e[0] == "error" and e[1] == ID_AGE]) == 1
 
 
 def test_cookies_txt_is_not_modified(tmp_path):
-    """yt-dlp reescribe el archivo de cookies al terminar: se le pasa una copia temporal."""
+    """yt-dlp rewrites the cookies file when done: it gets a temporary copy."""
     file = tmp_path / "cookies.txt"
     original = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tf6=8\n"
     file.write_text(original, encoding="utf-8")
@@ -159,7 +159,7 @@ def test_cookies_txt_is_not_modified(tmp_path):
         snapshot = op["cookiefile"]
         assert snapshot != str(file) and Path(snapshot).read_text(encoding="utf-8") == original
         with m.YoutubeDL(op) as ydl:
-            ydl.cookiejar  # carga las cookies; al salir, yt-dlp las vuelve a guardar en la copia
+            ydl.cookiejar  # loads the cookies; on exit, yt-dlp saves them back into the copy
     assert not Path(snapshot).exists()
     assert file.read_text(encoding="utf-8") == original
 
@@ -206,7 +206,7 @@ def test_ytmusic_uses_proxy(monkeypatch):
     assert created == [{"http": "socks5://h:1", "https": "socks5://h:1"}, None]
 
 
-# ------------------------------------------------------------------ versión y FFmpeg incluido
+# ------------------------------------------------------------------ version and bundled FFmpeg
 def test_version():
     assert m.is_newer(m.VERSION, "0.0.1")
 
@@ -238,7 +238,7 @@ def test_setup_bundled_ffmpeg(tmp_path, monkeypatch):
     assert os.environ["PATH"].split(os.pathsep)[0] == str(tmp_path / "ffmpeg")
 
 
-# ------------------------------------------------------------------ notificaciones y bandeja
+# ------------------------------------------------------------------ notifications and tray
 def test_batch_summary():
     assert desktop.batch_summary(78, 2) == "78 canciones descargadas · 2 con error"
     assert desktop.batch_summary(1, 0) == "1 canción descargada"
@@ -270,11 +270,11 @@ def test_tray_without_library_does_not_break(monkeypatch):
     assert not desktop.tray_available()
     assert b.show() is False and not b.visible
     assert b.notify("t", "m") is False
-    b.hide()  # no falla
+    b.hide()  # doesn't fail
 
 
 def test_tray_does_not_hide_if_icon_does_not_appear(monkeypatch):
-    """Si el sistema no tiene bandeja, mostrar() debe decir False (y la ventana no se esconde)."""
+    """If the system has no tray, show() must return False (and the window isn't hidden)."""
     import types
 
     class InvisibleIcon:
@@ -301,14 +301,14 @@ def test_anchored():
     import types
     assert not desktop._anchored(types.SimpleNamespace(visible=False))
     assert desktop._anchored(types.SimpleNamespace(visible=True))  # Windows / macOS
-    assert not desktop._anchored(types.SimpleNamespace(visible=True, _systray_manager=None))  # X11 sin bandeja
+    assert not desktop._anchored(types.SimpleNamespace(visible=True, _systray_manager=None))  # X11 without a tray
     assert desktop._anchored(types.SimpleNamespace(visible=True, _systray_manager=123))
 
 
-# ------------------------------------------------------------------ descarga con límite (de punta a punta)
+# ------------------------------------------------------------------ download with a limit (end to end)
 @needs_ffmpeg
 def test_download_with_speed_limit(tmp_path, monkeypatch):
-    """Con el límite activo yt-dlp recibe 'ratelimit' y la descarga igual termina."""
+    """With the limit on, yt-dlp gets 'ratelimit' and the download still finishes."""
     import functools
     import http.server
 
@@ -339,4 +339,4 @@ def test_download_with_speed_limit(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
     assert [e for e in events if e[0] == "done"]
-    assert 2 * 1024 * 1024 in views  # 4 MB/s repartidos entre 2 descargas
+    assert 2 * 1024 * 1024 in views  # 4 MB/s split among 2 downloads

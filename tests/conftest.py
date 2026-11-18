@@ -3,14 +3,14 @@ from pathlib import Path
 
 import pytest
 
-# Permite importar motor_descarga desde la raíz del proyecto
+# Allows importing the app's modules from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 @pytest.fixture(autouse=True)
 def no_third_party_internet(monkeypatch):
-    """Las pruebas no consultan MusicBrainz ni LRCLIB de verdad (sería lento e inestable):
-    por defecto no encuentran nada. Las pruebas de esos módulos simulan sus respuestas."""
+    """Tests don't query the real MusicBrainz or LRCLIB (it would be slow and flaky):
+    by default they find nothing. The tests for those modules simulate their responses."""
     import lyrics
     import metadata
     monkeypatch.setattr(metadata, "search", lambda *a, **k: None)

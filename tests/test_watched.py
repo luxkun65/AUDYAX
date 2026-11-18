@@ -1,4 +1,4 @@
-"""Playlists vigiladas: detectar canciones nuevas y bajar solo esas."""
+"""Watched playlists: detect new songs and download only those."""
 import threading
 from datetime import datetime, timedelta
 
@@ -13,7 +13,7 @@ import watched as v
     ("https://music.youtube.com/playlist?list=OLAK5uy_abc", True),
     ("https://music.youtube.com/browse/MPREb_abc", True),
     ("https://www.youtube.com/watch?v=x&list=PL123", True),
-    ("https://music.youtube.com/watch?v=x&list=RDAMVMx", False),   # radio automática
+    ("https://music.youtube.com/watch?v=x&list=RDAMVMx", False),   # automatic radio
     ("https://www.youtube.com/watch?v=x", False),
     ("https://example.com/playlist?list=PL1", False),
     ("", False),
@@ -32,14 +32,14 @@ def test_canonical_playlist_url():
 
 
 def test_add_and_remove(tmp_path):
-    song_list = []
-    a = v.add(song_list, "https://www.youtube.com/watch?v=x&list=PL1", tmp_path)
-    b = v.add(song_list, "https://www.youtube.com/playlist?list=PL1", tmp_path)  # la misma
-    assert a is b and len(song_list) == 1
+    watch_list = []
+    a = v.add(watch_list, "https://www.youtube.com/watch?v=x&list=PL1", tmp_path)
+    b = v.add(watch_list, "https://www.youtube.com/playlist?list=PL1", tmp_path)  # the same one
+    assert a is b and len(watch_list) == 1
     with pytest.raises(ValueError):
-        v.add(song_list, "https://www.youtube.com/watch?v=solo", tmp_path)
-    v.remove(song_list, a["url"])
-    assert song_list == []
+        v.add(watch_list, "https://www.youtube.com/watch?v=solo", tmp_path)
+    v.remove(watch_list, a["url"])
+    assert watch_list == []
 
 
 def _plan(entries, is_playlist=True, title="Mi Lista"):
@@ -55,7 +55,7 @@ def _to_entry(i):
 def test_check_finds_new_songs(tmp_path, monkeypatch):
     (tmp_path / "descargados.txt").write_text("youtube id1\nyoutube id3\n", encoding="utf-8")
     monkeypatch.setattr(m, "resolve", _plan([_to_entry(i) for i in range(1, 5)]))
-    watch = v.new_item("https://www.youtube.com/playlist?list=PL1", tmp_path)
+    watch = v.create("https://www.youtube.com/playlist?list=PL1", tmp_path)
     new_songs = v.check(watch)
     assert [e["id"] for e in new_songs] == ["id2", "id4"]
     assert (watch["name"], watch["total"], watch["new_count"], watch["error"]) == ("Mi Lista", 4, 2, "")
@@ -66,7 +66,7 @@ def test_check_with_error(tmp_path, monkeypatch):
     def fails(*a, **k):
         raise ConnectionError("sin internet")
     monkeypatch.setattr(m, "resolve", fails)
-    watch = v.new_item("https://www.youtube.com/playlist?list=PL1", tmp_path)
+    watch = v.create("https://www.youtube.com/playlist?list=PL1", tmp_path)
     assert v.check(watch) == [] and "sin internet" in watch["error"]
     assert v.check_summary(watch).startswith("No se pudo revisar")
     monkeypatch.setattr(m, "resolve", _plan([], is_playlist=True))
