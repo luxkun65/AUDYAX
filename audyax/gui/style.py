@@ -215,6 +215,15 @@ def cover_jpeg(img: Image.Image, square: bool, max_side: int = 1200) -> bytes:
     return output.getvalue()
 
 
+def logo(size: int) -> ctk.CTkImage:
+    """The app icon (assets/audyax.png); the plain note icon if the file is missing."""
+    try:
+        img = Image.open(resource_path("audyax.png")).convert("RGBA")
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+    except OSError:
+        return icon("note", size, C["accent"])
+
+
 def resource_path(name: str) -> Path:
     """File in the assets/ folder, both when running with Python and from the .exe."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))  # project root
