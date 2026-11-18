@@ -41,6 +41,8 @@ from escritorio import (
     notificar,
     resumen_lote,
 )
+import reproductor
+import vigiladas
 from motor_descarga import (
     CONFIG_POR_DEFECTO,
     HAY_MUTAGEN,
@@ -54,6 +56,7 @@ from motor_descarga import (
     cargar_config,
     descargas_simultaneas,
     ejecutar_trabajo,
+    opciones_red,
     es_enlace_youtube,
     es_mas_nueva,
     escribir_etiquetas,
@@ -220,6 +223,10 @@ def _dibujar_icono(nombre: str, color: str, tam: int) -> Image.Image:
             linea([(.67, .33), (.33, .67)], w + 1, "#ffffff")
     elif nombre == "punto":
         d.ellipse(caja(.05, .05, .95, .95), fill=color)
+    elif nombre == "ojo":
+        d.chord(caja(.04, .22, .96, 1.18), start=200, end=340, outline=color, width=w)
+        d.chord(caja(.04, -.18, .96, .78), start=20, end=160, outline=color, width=w)
+        d.ellipse(caja(.36, .36, .64, .64), fill=color)
     return im.resize((tam, tam), Image.LANCZOS)
 
 
@@ -392,7 +399,7 @@ class FilaLista:
         for w in (self.frame, self.l_estado, self.l_thumb, self.l_titulo, self.l_artista,
                   self.l_album, self.l_anio, self.l_enlace):
             w.bind("<Button-1>", lambda e: app._seleccionar(vid), add=True)
-            w.bind("<Double-Button-1>", lambda e: app._abrir_enlace(vid), add=True)
+            w.bind("<Double-Button-1>", lambda e: app._doble_clic(vid), add=True)
             # Clic derecho (Button-2 en macOS): menú con las acciones de esa canción
             for boton in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
                 if boton:
@@ -791,6 +798,123 @@ class VentanaEtiquetas(ctk.CTkToplevel):
 # ==============================================================================
 # VENTANA PRINCIPAL
 # ==============================================================================
+# ==============================================================================
+# PLAYLISTS VIGILADAS
+# ==============================================================================
+class VentanaVigiladas(ctk.CTkToplevel):
+    """Playlists guardadas: AUDYAX revisa si tienen canciones nuevas y baja solo esas."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Playlists vigiladas")
+        self.geometry("640x520")
+        self.minsize(560, 380)
+        self.transient(app)
+        self.configure(fg_color=C["bg"])
+
+        ctk.CTkLabel(self, text="Playlists vigiladas", font=app.f_det, anchor="w").pack(
+            anchor="w", padx=16, pady=(14, 0))
+        ctk.CTkLabel(self, text="AUDYAX revisa si tienen canciones nuevas y baja solo esas, a la "
+                                "carpeta donde guardas tu música.", font=app.f_peq,
+                     text_color=C["suave"], anchor="w", wraplength=600, justify="left").pack(
+            anchor="w", padx=16, pady=(0, 8))
+
+        fila = ctk.CTkFrame(self, fg_color="transparent")
+        fila.pack(fill="x", padx=16, pady=(0, 8))
+        self.var_url = tk.StringVar(value=self._sugerida())
+        e = ctk.CTkEntry(fila, textvariable=self.var_url, height=34, corner_radius=10, font=app.f_norm,
+                         placeholder_text="Enlace de una playlist o un álbum…", fg_color=C["input"],
+                         border_color=C["borde"], text_color=C["texto"])
+        e.pack(side="left", fill="x", expand=True)
+        e.bind("<Return>", lambda _e: self._agregar())
+        app._boton(fila, "Vigilar", self._agregar, icono("ojo", 16, C["sobre_acento"]),
+                   acento=True, width=110, height=34).pack(side="left", padx=(8, 0))
+
+        self.lista = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=14, border_width=1,
+                                            border_color=C["borde"])
+        self.lista.pack(fill="both", expand=True, padx=16)
+
+        pie = ctk.CTkFrame(self, fg_color="transparent")
+        pie.pack(fill="x", padx=16, pady=12)
+        self.btn_todas = app._boton(pie, "Revisar todas", app._revisar_vigiladas, icono("refresh", 16),
+                                    height=34)
+        self.btn_todas.pack(side="left")
+        app._boton(pie, "Cerrar", self.destroy, height=34, width=90).pack(side="right")
+        self.refrescar()
+        self.after(150, self.focus)
+
+    def _sugerida(self) -> str:
+        """El enlace copiado o la última playlist bajada, si es una playlist que aún no se vigila."""
+        candidatas = [getattr(self.app, "ultima_playlist", "")]
+        try:
+            candidatas.insert(0, self.app.clipboard_get().strip())
+        except tk.TclError:
+            pass
+        for url in candidatas:
+            if url and vigiladas.es_playlist(url):
+                canon = vigiladas.url_playlist(url)
+                if not any(v["url"] == canon for v in self.app.vigiladas):
+                    return canon
+        return ""
+
+    def _agregar(self):
+        url = self.var_url.get().strip()
+        if url and self.app._vigilar(url):
+            self.var_url.set("")
+
+    def refrescar(self):
+        app = self.app
+        for w in self.lista.winfo_children():
+            w.destroy()
+        self.btn_todas.configure(state="normal" if app.vigiladas else "disabled")
+        if not app.vigiladas:
+            ctk.CTkLabel(self.lista, text="Todavía no vigilas ninguna playlist.\nPega arriba el enlace de "
+                                          "una y dale «Vigilar».", font=app.f_norm, text_color=C["suave"],
+                         justify="center").pack(pady=40)
+            return
+        for i, v in enumerate(app.vigiladas):
+            if i:
+                ctk.CTkFrame(self.lista, height=1, fg_color=C["borde"]).pack(fill="x", padx=8)
+            self._fila(v)
+
+    def _fila(self, v):
+        app = self.app
+        marco = ctk.CTkFrame(self.lista, fg_color="transparent")
+        marco.pack(fill="x", padx=4, pady=6)
+        botones = ctk.CTkFrame(marco, fg_color="transparent")
+        botones.pack(side="right")  # primero: así el texto nunca les quita espacio
+        texto = ctk.CTkFrame(marco, fg_color="transparent")
+        texto.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        ctk.CTkLabel(texto, text=corto(limpiar_tk(v.get("nombre") or v["url"]), 40), font=app.f_neg,
+                     anchor="w").pack(anchor="w")
+        revisando = v["url"] in app.revisando
+        estado = "Revisando…" if revisando else vigiladas.texto_revision(v)
+        ctk.CTkLabel(texto, text=corto(limpiar_tk(estado), 110), font=app.f_peq, anchor="w",
+                     wraplength=300, justify="left", text_color=C["rojo"] if v.get("error") and not revisando else C["suave"]).pack(anchor="w")
+        ctk.CTkLabel(texto, text=corto(v["carpeta"], 60), font=app.f_peq, text_color=C["suave"],
+                     anchor="w", image=icono("folder", 12, C["suave"]), compound="left").pack(anchor="w")
+
+        n = len(app.nuevas_vig.get(v["url"]) or [])
+        b = app._boton(botones, f"Bajar {n} nueva{'s' if n != 1 else ''}" if n else "Bajar nuevas",
+                       lambda u=v["url"]: app._bajar_nuevas(u), acento=bool(n), height=30)
+        b.configure(state="normal" if n and not revisando else "disabled")
+        b.pack(side="left", padx=(0, 6))
+        r = app._boton(botones, "", lambda x=v: app._revisar_vigilada(x), icono("refresh", 16),
+                       width=34, height=30)
+        r.configure(state="disabled" if revisando else "normal")
+        r.pack(side="left", padx=(0, 6))
+        app._boton(botones, "", lambda u=v["url"]: self._quitar(u), icono("trash", 16),
+                   width=34, height=30).pack(side="left")
+
+    def _quitar(self, url):
+        v = next((x for x in self.app.vigiladas if x["url"] == url), None)
+        nombre = (v or {}).get("nombre") or url
+        if messagebox.askyesno("Dejar de vigilar", f"¿Dejar de vigilar «{nombre}»?\n\n"
+                                                   "Las canciones que ya bajaste no se borran.", parent=self):
+            self.app._dejar_de_vigilar(url)
+
+
 class App(ctk.CTk, *_BASES_DND):
     def __init__(self):
         self.cfg = cargar_config()
@@ -836,6 +960,13 @@ class App(ctk.CTk, *_BASES_DND):
         self._vista_programada = False
         self.ventana_resultados = None
         self.ventana_exportar = None
+        self.ventana_vigiladas = None
+        self.reproductor = None          # barra del mini reproductor (se crea al usarla)
+        self.vigiladas = [dict(v) for v in self.cfg.get("vigiladas") or []]
+        self.cfg["vigiladas"] = self.vigiladas
+        self.revisando = set()           # urls de vigiladas que se están revisando
+        self.nuevas_vig = {}             # url -> canciones nuevas encontradas en la última revisión
+        self._ofrecidas_vig = set()      # playlists a las que ya se les ofreció vigilarlas
         self.lote = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
         self._avisado_segundo_plano = False
         self.bandeja = Bandeja(self._imagen_bandeja(),
@@ -865,6 +996,8 @@ class App(ctk.CTk, *_BASES_DND):
         self.bind("<FocusIn>", self._al_enfocar, add=True)
         if self.cfg.get("revisar_ytdlp", True):
             self.after(2500, lambda: self._revisar_ytdlp(manual=False))
+        if self.cfg.get("revisar_vigiladas", True) and self.vigiladas:
+            self.after(4000, lambda: self._revisar_vigiladas(al_abrir=True))
 
     # ---------------------------------------------------------------- construcción
     def _boton(self, padre, texto, comando, icono_=None, acento=False, **kw):
@@ -899,6 +1032,7 @@ class App(ctk.CTk, *_BASES_DND):
         self._construir_lateral()
 
         main = ctk.CTkFrame(self, fg_color="transparent")
+        self.main = main
         main.grid(row=0, column=1, sticky="nsew", padx=(14, 16), pady=(12, 10))
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -981,6 +1115,7 @@ class App(ctk.CTk, *_BASES_DND):
         # Avisos (ocultos hasta que hagan falta)
         self.aviso_pp = Aviso(self, ctrl, 3, "link")
         self.aviso_yt = Aviso(self, ctrl, 4, "refresh")
+        self.aviso_vig = Aviso(self, ctrl, 5, "ojo")
 
         # Lista
         marco_l = self._tarjeta(main)
@@ -1116,6 +1251,7 @@ class App(ctk.CTk, *_BASES_DND):
                           command=comando).pack(padx=10, pady=3)
 
         item("Inicio", "home", activo=True)
+        item("Vigiladas", "ojo", comando=self._abrir_vigiladas)
         item("Configuración", "gear", comando=self._configuracion)
         item("Acerca de", "info", comando=self._acerca_de)
 
@@ -1188,6 +1324,7 @@ class App(ctk.CTk, *_BASES_DND):
             return marco
         self._pestana_general(pestana("General"))
         self._pestana_descargas(pestana("Descargas"))
+        self._pestana_extras(pestana("Letras y álbum"))
         self._pestana_avanzado(pestana("Avanzado"))
         pestanas.set("General")
         self.after(150, top.focus)
@@ -1276,6 +1413,38 @@ class App(ctk.CTk, *_BASES_DND):
         self._interruptor_cfg(t, "Avisar al abrir si hay una versión nueva", "revisar_ytdlp")
         self._boton(t, "Buscar actualización", lambda: self._revisar_ytdlp(manual=True),
                     icono("refresh", 16), height=32).pack(anchor="w", padx=12, pady=(10, 0))
+
+    def _pestana_extras(self, t):
+        """Letras, datos de MusicBrainz y playlists vigiladas."""
+        self._titulo_cfg(t, "Letras", primero=True)
+        nombres = {"no": "No", "lrc": "Archivo .lrc", "incrustada": "Dentro del archivo", "ambas": "Ambas"}
+        inverso = {v: k for k, v in nombres.items()}
+
+        def cambiar_letras(v):
+            self.cfg["letras"] = inverso[v]
+            guardar_config(self._cfg_actual())
+        seg = ctk.CTkSegmentedButton(
+            t, values=list(nombres.values()), font=self.f_norm, selected_color=C["acento"],
+            selected_hover_color=C["acento_hover"], unselected_color=C["card2"],
+            unselected_hover_color=C["hover"], text_color=C["texto"], command=cambiar_letras)
+        seg.set(nombres.get(self.cfg.get("letras", "no"), "No"))
+        seg.pack(anchor="w", padx=12)
+        self._nota_cfg(t, "Busca la letra en LRCLIB al terminar cada canción. «Archivo .lrc» la deja "
+                          "al lado de la canción (la leen la mayoría de reproductores); «Dentro del "
+                          "archivo» la guarda en sus etiquetas. Si hay letra sincronizada, el mini "
+                          "reproductor la va mostrando mientras suena.")
+
+        self._titulo_cfg(t, "Álbum, año y portada")
+        self._interruptor_cfg(t, "Completar álbum y año con MusicBrainz", "musicbrainz")
+        self._interruptor_cfg(t, "Usar la portada del álbum (Cover Art Archive)", "portada_caa")
+        self._nota_cfg(t, "Solo cuando YouTube no trae el álbum o el año. Si la canción no aparece "
+                          "con seguridad en MusicBrainz, se deja como viene. La portada del álbum "
+                          "reemplaza la miniatura del video; si no hay, se usa la miniatura.")
+
+        self._titulo_cfg(t, "Playlists vigiladas")
+        self._interruptor_cfg(t, "Revisar si tienen canciones nuevas al abrir AUDYAX", "revisar_vigiladas")
+        self._interruptor_cfg(t, "Bajar las canciones nuevas sin preguntar", "bajar_nuevas_auto")
+        self._nota_cfg(t, "Las playlists se agregan desde «Vigiladas» en la barra de la izquierda.")
 
     def _pestana_avanzado(self, t):
         """Opciones avanzadas. Todas vienen apagadas; solo actúan si se encienden."""
@@ -1490,7 +1659,9 @@ class App(ctk.CTk, *_BASES_DND):
             "descargas_simultaneas": descargas_simultaneas(self.cfg),
             **{k: self.cfg.get(k, CONFIG_POR_DEFECTO[k]) for k in (
                 "notificaciones", "segundo_plano", "limite_velocidad_activo", "limite_velocidad_mb",
-                "proxy_activo", "proxy", "cookies_activo", "cookies_origen", "cookies_archivo")},
+                "proxy_activo", "proxy", "cookies_activo", "cookies_origen", "cookies_archivo",
+                "letras", "musicbrainz", "portada_caa", "volumen", "revisar_vigiladas", "bajar_nuevas_auto")},
+            "vigiladas": self.vigiladas,
         }
 
     def _descargar(self):
@@ -1658,7 +1829,7 @@ class App(ctk.CTk, *_BASES_DND):
             return
         self._cerrar()
 
-    def _encolar(self, url: str, subcarpeta: str = "", extras=None) -> bool:
+    def _encolar(self, url: str, subcarpeta: str = "", extras=None, ajustes=None) -> bool:
         cfg = self._cfg_actual()
         if not cfg["carpeta"]:
             messagebox.showwarning("Falta la carpeta", "Elige dónde guardar las canciones.")
@@ -1671,6 +1842,7 @@ class App(ctk.CTk, *_BASES_DND):
         guardar_config(cfg)
         cfg["subcarpeta"] = subcarpeta  # p. ej. la carpeta de la playlist al reintentar
         cfg["extras"] = extras or {}    # título/artista/álbum a conservar (ver _reintentar)
+        cfg.update(ajustes or {})       # p. ej. playlist vigilada: su carpeta y solo las nuevas
         if self.pendientes == 0:
             self.lote = {"ok": 0, "err": 0, "omit": 0}  # empieza una tanda nueva
         self.pendientes += 1
@@ -1764,6 +1936,8 @@ class App(ctk.CTk, *_BASES_DND):
             menu.add_command(label="Cancelar esta canción", command=lambda: self._cancelar_canciones([vid]))
         if f["color"] == "rojo" and f["url"]:
             menu.add_command(label="Reintentar", command=self._reintentar)
+        if self._reproducible(f):
+            menu.add_command(label="Reproducir", command=lambda: self._reproducir(vid))
         if f["color"] == "verde" and f["ruta"]:
             menu.add_command(label="Editar etiquetas", command=self._editar_etiquetas)
             menu.add_command(label="Abrir carpeta", command=self._abrir_carpeta_cancion)
@@ -1834,7 +2008,7 @@ class App(ctk.CTk, *_BASES_DND):
                 "num": len(self.filas) + 1, "color": "amarillo", "texto": "En cola", "titulo": vid,
                 "artista": "", "album": "", "anio": "", "genero": "", "url": "", "ruta": "",
                 "subcarpeta": "", "motivo": "", "replaygain": "", "miniatura": "", "img_pedida": False,
-                "img_s": None, "img_b": None, "datos": None, "datos_pedidos": False,
+                "img_s": None, "img_b": None, "img_pil": None, "letra": "", "musicbrainz": False, "datos": None, "datos_pedidos": False,
                 "texto_previo": "", "pos": len(self.filas), "marca": tk.BooleanVar(value=False)}
             self.filas[vid]["w"] = FilaLista(self, self.lista, vid)
             if self._vista_activa():
@@ -2086,6 +2260,10 @@ class App(ctk.CTk, *_BASES_DND):
                 f["datos"] = ev[2]
                 if self.sel == ev[1]:
                     self._mostrar_detalle()
+        elif tipo == "playlist":
+            self._playlist_bajada(ev[1], ev[2])
+        elif tipo == "vigilada":
+            self._vigilada_revisada(ev[1], ev[2], ev[3], ev[4])
         elif tipo == "fin":
             self.pendientes = max(0, self.pendientes - 1)
             if self.pendientes == 0 and self.pausa.is_set():
@@ -2126,6 +2304,7 @@ class App(ctk.CTk, *_BASES_DND):
         try:
             img = Image.open(BytesIO(datos))
             img.load()
+            f["img_pil"] = img
             f["img_s"] = imagen_cuadrada(img, 40, 8)
             f["img_b"] = imagen_cuadrada(img, 88, 12)
         except Exception:
@@ -2211,7 +2390,10 @@ class App(ctk.CTk, *_BASES_DND):
         if f["color"] == "rojo":
             self.l_det_info.configure(text=corto(f["motivo"] or f["texto"], 60), text_color=C["rojo"])
         elif f["color"] == "verde" and ruta:
-            self.l_det_info.configure(text=corto(Path(ruta).name, 60), text_color=C["suave"])
+            extra = [{"sincronizada": "letra sincronizada", "texto": "letra"}.get(f["letra"], "")]
+            extra.append("álbum de MusicBrainz" if f["musicbrainz"] else "")
+            texto = "  ·  ".join([corto(Path(ruta).name, 50)] + [e for e in extra if e])
+            self.l_det_info.configure(text=texto, text_color=C["suave"])
         else:
             self.l_det_info.configure(text=corto(f["texto"], 60), text_color=C["suave"])
         self.l_portada.configure(image=f["img_b"] or self.img_vacia_grande)
@@ -2247,6 +2429,152 @@ class App(ctk.CTk, *_BASES_DND):
         url = self._enlace_de(vid)
         if url:
             webbrowser.open(url)
+
+    # ---------------------------------------------------------------- mini reproductor
+    def _reproducible(self, f) -> bool:
+        return f["color"] == "verde" and bool(f["ruta"]) and Path(f["ruta"]).exists()
+
+    def _doble_clic(self, vid):
+        """Doble clic: si ya está descargada, suena; si no, se abre su enlace."""
+        f = self.filas.get(vid)
+        if f and self._reproducible(f):
+            self._reproducir(vid)
+        else:
+            self._abrir_enlace(vid)
+
+    def _item_reproductor(self, vid) -> dict:
+        f = self.filas[vid]
+        return {"id": vid, "ruta": f["ruta"], "titulo": f["titulo"], "artista": f["artista"],
+                "imagen": f["img_pil"]}
+
+    def _vecina(self, item, paso):
+        """La canción descargada anterior/siguiente según el orden en que se ve la lista."""
+        ids = [v for v in self._filas_en_vista() if self._reproducible(self.filas[v])]
+        if not ids:
+            return None
+        i = ids.index(item["id"]) if item["id"] in ids else (-1 if paso > 0 else len(ids))
+        j = i + paso
+        return self._item_reproductor(ids[j]) if 0 <= j < len(ids) else None
+
+    def _reproducir(self, vid):
+        if self.reproductor is None:
+            colores = {k: C[k] for k in ("card", "texto", "suave", "acento", "acento_hover",
+                                         "sobre_acento", "hover", "borde")}
+            fuentes = {"neg": self.f_neg, "norm": self.f_norm, "peq": self.f_peq}
+            self.reproductor = reproductor.BarraReproductor(
+                self.main, colores, fuentes, vecina=self._vecina,
+                al_cambiar_volumen=lambda v: self.cfg.__setitem__("volumen", round(v, 2)),
+                al_cerrar=lambda: self.reproductor.grid_remove(),
+                volumen=float(self.cfg.get("volumen", 0.8)))
+        try:
+            self.reproductor.reproducir(self._item_reproductor(vid))
+        except RuntimeError as e:
+            messagebox.showwarning("No se puede reproducir", f"No se pudo reproducir la canción: {e}.")
+            return
+        self.reproductor.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+
+    # ---------------------------------------------------------------- playlists vigiladas
+    def _abrir_vigiladas(self):
+        v = self.ventana_vigiladas
+        if v is not None and v.winfo_exists():
+            v.focus()
+            return
+        self.ventana_vigiladas = VentanaVigiladas(self)
+
+    def _refrescar_vigiladas(self):
+        v = self.ventana_vigiladas
+        if v is not None and v.winfo_exists():
+            v.refrescar()
+
+    def _vigilar(self, url: str, nombre: str = "") -> bool:
+        carpeta = self.var_carpeta.get().strip()
+        if not carpeta:
+            messagebox.showwarning("Falta la carpeta", "Elige primero dónde guardar las canciones.")
+            return False
+        try:
+            v = vigiladas.agregar(self.vigiladas, url, carpeta, nombre)
+        except ValueError:
+            messagebox.showwarning("No es una playlist", "Pega el enlace de una playlist o un álbum de "
+                                                         "YouTube o YouTube Music.")
+            return False
+        guardar_config(self._cfg_actual())
+        self._refrescar_vigiladas()
+        self._revisar_vigilada(v)
+        return True
+
+    def _dejar_de_vigilar(self, url: str):
+        vigiladas.quitar(self.vigiladas, url)
+        self.nuevas_vig.pop(url, None)
+        guardar_config(self._cfg_actual())
+        self._refrescar_vigiladas()
+
+    def _revisar_vigilada(self, v, al_abrir=False):
+        if v["url"] in self.revisando:
+            return
+        self.revisando.add(v["url"])
+        copia, red = dict(v), opciones_red(self._cfg_actual())
+
+        def trabajo():
+            try:
+                nuevas = vigiladas.revisar(copia, red)
+            except Exception as e:  # no debería pasar: revisar ya atrapa los errores
+                copia["error"], nuevas = str(e), []
+            self.eventos.put(("vigilada", v["url"], copia, nuevas, al_abrir))
+        threading.Thread(target=trabajo, daemon=True).start()
+        self._refrescar_vigiladas()
+
+    def _revisar_vigiladas(self, al_abrir=False):
+        for v in list(self.vigiladas):
+            self._revisar_vigilada(v, al_abrir)
+
+    def _vigilada_revisada(self, url, copia, nuevas, al_abrir):
+        self.revisando.discard(url)
+        for v in self.vigiladas:
+            if v["url"] == url:
+                v.update(copia)
+                break
+        else:
+            return  # la quitaron mientras se revisaba
+        self.nuevas_vig[url] = nuevas
+        guardar_config(self._cfg_actual())
+        self._refrescar_vigiladas()
+        if al_abrir and not self.revisando:  # terminó la revisión de todas: un solo aviso
+            con_nuevas = [v for v in self.vigiladas if self.nuevas_vig.get(v["url"])]
+            if not con_nuevas:
+                return
+            if self.cfg.get("bajar_nuevas_auto"):
+                for v in con_nuevas:
+                    self._bajar_nuevas(v["url"])
+                return
+            total = sum(len(self.nuevas_vig[v["url"]]) for v in con_nuevas)
+            donde = (f"«{con_nuevas[0].get('nombre') or 'tu playlist'}»" if len(con_nuevas) == 1
+                     else f"{len(con_nuevas)} playlists vigiladas")
+            self.aviso_vig.mostrar(
+                f"Hay {total} canción{'es' if total != 1 else ''} nueva{'s' if total != 1 else ''} en {donde}.",
+                [("Ver", self._abrir_vigiladas, False),
+                 ("Bajar nuevas", lambda: [self._bajar_nuevas(v["url"]) for v in con_nuevas], True)])
+
+    def _bajar_nuevas(self, url: str):
+        v = next((x for x in self.vigiladas if x["url"] == url), None)
+        if v is None:
+            return
+        if self._encolar(v["url"], ajustes={"carpeta": v["carpeta"], "solo_nuevas": True}):
+            self.nuevas_vig[url] = []
+            v["nuevas"] = 0
+            guardar_config(self._cfg_actual())
+            self._refrescar_vigiladas()
+
+    def _playlist_bajada(self, url, titulo):
+        """Se bajó una playlist: ofrecer vigilarla (una vez por sesión y si aún no lo está)."""
+        self.ultima_playlist = url
+        canon = vigiladas.url_playlist(url) if vigiladas.es_playlist(url) else ""
+        if not canon or canon in self._ofrecidas_vig or any(v["url"] == canon for v in self.vigiladas):
+            return
+        self._ofrecidas_vig.add(canon)
+        nombre = titulo or "esta playlist"
+        self.aviso_vig.mostrar(f"¿Vigilar «{nombre}»? AUDYAX te avisará cuando tenga canciones nuevas.",
+                               [("No", lambda: None, False),
+                                ("Vigilar", lambda: self._vigilar(canon, titulo), True)])
 
     def _abrir_carpeta_cancion(self):
         ruta = self.filas[self.sel]["ruta"] if self.sel in self.filas else ""
@@ -2456,6 +2784,8 @@ class App(ctk.CTk, *_BASES_DND):
         self._cerrar()
 
     def _cerrar(self):
+        if self.reproductor is not None:
+            self.reproductor.motor.detener()
         guardar_config(self._cfg_actual())
         self._cancelar()
         self.bandeja.ocultar()
@@ -2492,6 +2822,13 @@ def autoprueba(app: "App", salida: str):
     except Exception as e:
         r["bandeja_se_muestra"] = False
         r["bandeja_error"] = str(e)
+    try:  # la librería de audio tiene que venir en el .exe; la tarjeta de sonido puede no estar (CI)
+        import numpy  # noqa: F401
+        import sounddevice  # noqa: F401
+        r["audio_libreria"] = True
+    except Exception as e:
+        r["audio_libreria"], r["audio_libreria_error"] = False, str(e)
+    r["audio"], r["audio_motivo"] = reproductor.audio_disponible()  # informativo
     Path(salida).write_text(json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8")
     app.destroy()
 

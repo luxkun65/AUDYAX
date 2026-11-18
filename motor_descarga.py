@@ -29,6 +29,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+import letras
+import metadatos
 from yt_dlp import YoutubeDL
 from yt_dlp.postprocessor import (
     EmbedThumbnailPP,
@@ -91,6 +93,16 @@ CONFIG_POR_DEFECTO = {
     "cookies_activo": False,
     "cookies_origen": "firefox",     # firefox, chrome, edge… o "archivo"
     "cookies_archivo": "",           # ruta a un cookies.txt (formato Netscape)
+    # Letras y metadatos
+    "letras": "no",                  # "no" | "lrc" | "incrustada" | "ambas" (ver letras.MODOS_LETRAS)
+    "musicbrainz": True,             # completar álbum y año con MusicBrainz si YouTube no los trae
+    "portada_caa": True,             # usar la portada del álbum de Cover Art Archive si se encuentra
+    # Mini reproductor
+    "volumen": 0.8,
+    # Playlists vigiladas
+    "vigiladas": [],                 # [{url, nombre, carpeta, ultima_revision, nuevas}] (ver vigiladas.py)
+    "revisar_vigiladas": True,       # revisar al abrir AUDYAX
+    "bajar_nuevas_auto": False,      # bajar las nuevas sin preguntar
 }
 NAVEGADORES_COOKIES = ["firefox", "chrome", "edge", "brave", "opera", "vivaldi", "chromium"]
 PROXY_VALIDO = re.compile(r"^(https?|socks4a?|socks5h?)://[^\s/]+(:\d+)?/?$", re.IGNORECASE)
@@ -291,8 +303,9 @@ class LimpiarMetadata(PostProcessor):
     (solo el título; si ya existe, añade '(Artista)') y avisa a la interfaz."""
 
     def __init__(self, downloader, destino: Path, emitir, cancelar, extras=None, album_defecto="",
-                 organizar="plano", reservas=None, pausa=None, omitir=None):
+                 organizar="plano", reservas=None, pausa=None, omitir=None, cfg=None):
         super().__init__(downloader)
+        self.cfg = cfg or {}
         self.reservas = reservas or ReservaNombres()
         self.pausa = pausa
         self.omitir = omitir
@@ -304,6 +317,29 @@ class LimpiarMetadata(PostProcessor):
         # lo que deduce yt-dlp (que con un videoclip pondría "Canción (Official Video)" o "ArtistaVEVO").
         self.extras = extras or {}
         self.album_defecto = album_defecto
+
+    def _completar_con_musicbrainz(self, info: dict):
+        """Pide a MusicBrainz el álbum y el año reales y, si está activado, pone la portada
+        del álbum como primera opción de miniatura."""
+        self.emitir(("estado", info["id"], "Buscando álbum en MusicBrainz…"))
+        try:
+            hallado = metadatos.buscar(info.get("title"), info.get("artist"), info.get("duration"),
+                                       proxy=self.cfg.get("proxy", "") if self.cfg.get("proxy_activo") else "")
+        except Exception as e:  # sin conexión, MusicBrainz caído…: se sigue con lo de YouTube
+            self.report_warning(f"MusicBrainz: {e}")
+            return
+        if not hallado:
+            return
+        if not info.get("album") and hallado["album"]:
+            info["album"] = hallado["album"]
+        if hallado["anio"] and not (info.get("release_year") or info.get("release_date")):
+            info["release_year"] = int(hallado["anio"])
+        if self.cfg.get("portada_caa"):
+            # yt-dlp prueba las miniaturas empezando por la ÚLTIMA y, si una no existe (404),
+            # sigue con la anterior: la portada del álbum va al final y la de YouTube queda de respaldo
+            for i, url in enumerate(reversed(metadatos.urls_portada(hallado))):
+                info.setdefault("thumbnails", []).append({"url": url, "id": f"caa{i}", "ext": "jpg"})
+        info["_musicbrainz"] = hallado
 
     def run(self, info):
         esperar_si_pausa(self.pausa, self.cancelar, info.get("id"), self.omitir)
@@ -328,6 +364,8 @@ class LimpiarMetadata(PostProcessor):
             info["title"] = info["track"]
         # No escribir número de pista: yt-dlp omite las etiquetas que valen None
         info["track_number"] = None
+        if self.cfg.get("musicbrainz") and metadatos.datos_pobres(info):
+            self._completar_con_musicbrainz(info)
         if not info.get("album"):
             info["album"] = info.get("playlist_title") or self.album_defecto or info["title"]
 
@@ -515,11 +553,12 @@ def debe_normalizar(cfg: dict) -> bool:
 class MarcarListo(PostProcessor):
     """Se ejecuta al final (after_move): el archivo ya está tageado y en su sitio."""
 
-    def __init__(self, downloader, emitir, replaygain, registro):
+    def __init__(self, downloader, emitir, replaygain, registro, cfg=None):
         super().__init__(downloader)
         self.emitir = emitir
         self.replaygain = replaygain
         self.registro = registro  # canciones analizadas (para el ReplayGain de álbum)
+        self.cfg = cfg or {}
 
     def run(self, info):
         datos = etiquetas(info)
@@ -530,6 +569,13 @@ class MarcarListo(PostProcessor):
                 quitar_numero_pista(Path(ruta))
             except Exception as e:  # un fallo aquí no invalida la descarga
                 self.report_warning(f"No se pudo quitar el número de pista: {e}")
+            # yt-dlp escribe como año la fecha de SUBIDA del video; si se conoce el año real del
+            # lanzamiento (YouTube Music o MusicBrainz), se escribe ese, que es el que se muestra
+            if info.get("release_year") and se_puede_editar(ruta):
+                try:
+                    escribir_etiquetas(ruta, {"anio": str(info["release_year"])})
+                except Exception as e:
+                    self.report_warning(f"No se pudo escribir el año: {e}")
         if self.replaygain and ruta:
             self.emitir(("estado", info["id"], "Calculando ReplayGain…"))
             try:
@@ -541,8 +587,27 @@ class MarcarListo(PostProcessor):
                 datos["replaygain"] = texto_rg(vol)
             except Exception as e:  # un fallo aquí no invalida la descarga
                 self.report_warning(f"ReplayGain: {e}")
+        modo = self.cfg.get("letras", "no")
+        if ruta and modo in letras.MODOS_LETRAS and modo != "no":
+            datos["letra"] = self._letra(info, ruta, modo)
+        if info.get("_musicbrainz"):
+            datos["musicbrainz"] = True
         self.emitir(("listo", info["id"], datos))
         return [], info
+
+    def _letra(self, info, ruta, modo) -> str:
+        """Busca la letra en LRCLIB y la guarda. Devuelve "sincronizada", "texto" o ""."""
+        self.emitir(("estado", info["id"], "Buscando letra…"))
+        try:
+            letra = letras.buscar_letra(info.get("title"), info.get("artist"), info.get("album"),
+                                        info.get("duration"),
+                                        proxy=self.cfg.get("proxy", "") if self.cfg.get("proxy_activo") else "")
+            if not letra or not letras.guardar_letra(ruta, letra, modo):
+                return ""
+            return "sincronizada" if letra.get("sincronizada") else "texto"
+        except Exception as e:  # sin letra no es un error de la descarga
+            self.report_warning(f"Letra: {e}")
+            return ""
 
 
 def subcarpeta_relativa(destino: Path, carpeta: Path) -> str:
@@ -770,12 +835,12 @@ def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
     codec = "best" if cfg["formato"] == "original" else cfg["formato"]
     ydl.add_post_processor(FFmpegThumbnailsConvertorPP(ydl, format="jpg"), when="before_dl")
     ydl.add_post_processor(LimpiarMetadata(ydl, destino, emitir, cancelar, extras, album_defecto,
-                                           organizar, reservas, pausa, omitir), when="pre_process")
+                                           organizar, reservas, pausa, omitir, cfg), when="pre_process")
     ydl.add_post_processor(ExtraerAudio(ydl, forzar=debe_normalizar(cfg), preferredcodec=codec,
                                         preferredquality=cfg["calidad"]))
     ydl.add_post_processor(FFmpegMetadataPP(ydl, add_metadata=True))
     ydl.add_post_processor(EmbedThumbnailPP(ydl))
-    ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro), when="after_move")
+    ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro, cfg), when="after_move")
 
 
 def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None, red=None) -> dict:
@@ -873,6 +938,12 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
         destino = carpeta  # la playlist se reparte por artista/álbum en vez de ir a su carpeta
     destino.mkdir(parents=True, exist_ok=True)
     ya_estan = ids_en_archivo(carpeta)
+    if cfg.get("solo_nuevas") and plan.get("por_cancion"):
+        # Playlist vigilada: las que ya están ni siquiera se muestran
+        pares = [(u, e) for u, e in zip(plan["urls"], entradas) if e["id"] not in ya_estan]
+        plan["urls"], entradas = [u for u, _ in pares], [e for _, e in pares]
+    if es_playlist:
+        emitir(("playlist", url, plan.get("album_defecto") or ""))  # p. ej. para ofrecer vigilarla
     sub = subcarpeta_relativa(destino, carpeta)
     for e in entradas:
         conocidas[e["id"]] = e

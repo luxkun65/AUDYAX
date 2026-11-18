@@ -53,6 +53,9 @@ def argumentos_pyinstaller() -> list:
         "--noconfirm",
         "--clean",
     ]
+    # sounddevice trae PortAudio (la salida de audio del mini reproductor) en _sounddevice_data
+    if ES_WINDOWS or sys.platform == "darwin":
+        args += ["--collect-data", "_sounddevice_data", "--collect-binaries", "_sounddevice_data"]
     # plyer también elige su módulo de notificaciones al arrancar, según el sistema
     if ES_WINDOWS:
         args += ["--hidden-import", "plyer.platforms.win.notification",

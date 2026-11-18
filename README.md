@@ -33,7 +33,11 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
   - **Speed limit** in MB/s (total, shared among parallel downloads).
   - **Proxy** (`http://`, `https://`, `socks5://`…), used for downloads, searches and YouTube Music playlists.
   - **Cookies** from your browser session (Firefox recommended) or a `cookies.txt` file, **used only for age-restricted videos**: every song is first tried without them, and only if YouTube asks to confirm the age is that song retried with your session. On Windows, Chrome/Edge and other Chromium browsers no longer let other programs read their cookies, so use Firefox or a `cookies.txt` export. Using your account with download tools may get it rate-limited by YouTube; a secondary account is safer.
-- Light and dark themes; settings are saved in `~/.descargador_musica.json` (tabs *General*, *Descargas*, *Avanzado*).
+- **Lyrics** (*Configuración → Letras y álbum*, off by default): after each song, AUDYAX looks up its lyrics in [LRCLIB](https://lrclib.net) (time-synced when available) and saves them as a `.lrc` file next to the song, inside the file's tags (MP3 `USLT`, M4A `©lyr`, Opus `LYRICS`), or both.
+- **Better album, year and cover**: when YouTube doesn't give the album or the year (the "—" in the list), AUDYAX looks the song up in [MusicBrainz](https://musicbrainz.org) and fills them in, and uses the album cover from the [Cover Art Archive](https://coverartarchive.org) instead of the video thumbnail. It is conservative: if the match is not clear (title, artist and duration), nothing is changed. On by default; each part can be turned off. If a service is down, it is skipped for 5 minutes so downloads don't slow down.
+- **Mini player**: double-click a downloaded song (or right-click → *Reproducir*) to listen without leaving the app: play/pause, previous/next (following the list as it's filtered and sorted), seek bar, volume (remembered), and the synced lyrics line by line if the song has them. Needs `sounddevice` and `numpy` (in `requirements.txt`; on Linux also `sudo apt install libportaudio2`).
+- **Watched playlists** (*Vigiladas* in the sidebar): save a playlist or album and AUDYAX checks whether it has new songs (on startup, or with *Revisar*) and downloads only those, to the same folder, using `descargados.txt`. After downloading a playlist, AUDYAX offers to watch it. Optionally, new songs can be downloaded automatically.
+- Light and dark themes; settings are saved in `~/.descargador_musica.json` (tabs *General*, *Descargas*, *Letras y álbum*, *Avanzado*).
 
 ## Download (Windows, no Python needed)
 
@@ -43,7 +47,7 @@ Get the latest `AUDYAX-x.y.z-windows.zip` from [Releases](https://github.com/lux
 
 - Python **3.11+**
 - [FFmpeg](https://ffmpeg.org/download.html) installed and available in the `PATH`
-- On Linux, tkinter: `sudo apt install python3-tk`
+- On Linux, tkinter and PortAudio (for the mini player): `sudo apt install python3-tk libportaudio2`
 
 ## Installation
 
@@ -103,6 +107,11 @@ The tests don't need internet. The ones that generate audio need FFmpeg and are 
 |---|---|
 | `motor_descarga.py` | Download engine: yt-dlp options, post-processing, tags, ReplayGain, settings. No GUI code; it communicates through events, so it can be used from any interface. |
 | `descargador_gui.py` | Graphical interface (customtkinter + Pillow). |
+| `reproductor.py` | Mini player: audio engine (FFmpeg → `sounddevice`) and the player bar. Kept separate for the future full music player. |
+| `letras.py` | Lyrics from LRCLIB: search, `.lrc` files, embedded lyrics, LRC parsing. |
+| `metadatos.py` | MusicBrainz lookups (album, year) and Cover Art Archive cover URLs. |
+| `vigiladas.py` | Watched playlists: which songs are new. |
+| `servicios.py` | Circuit breaker shared by the online services. |
 | `escritorio.py` | System tray icon and notifications (optional: AUDYAX works without them). |
 | `build.py` | Builds the program with PyInstaller (with FFmpeg and the icon). |
 | `tools/` | Download FFmpeg for the build, generate the icon, check the self-test. |

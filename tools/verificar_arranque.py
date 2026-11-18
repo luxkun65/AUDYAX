@@ -15,7 +15,7 @@ def main():
     print(json.dumps(datos, indent=2, ensure_ascii=False))
     errores = []
     for clave in ("ejecutable", "ffmpeg_funciona", "mutagen", "ytmusicapi", "icono", "notificaciones",
-                  "bandeja", "arrastrar_soltar"):
+                  "bandeja", "arrastrar_soltar", "audio_libreria"):
         if not datos.get(clave):
             errores.append(f"{clave} = {datos.get(clave)!r}")
     if "--ffmpeg-incluido" in sys.argv:
