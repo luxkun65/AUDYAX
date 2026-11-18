@@ -129,7 +129,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                                on_open=lambda: self.events.put(("tray", "open")),
                                on_pause=lambda: self.events.put(("tray", "pause")),
                                on_quit=lambda: self.events.put(("tray", "quit")),
-                               is_paused=lambda: self.pause.is_set())
+                               is_paused=lambda: self.pause.is_set(),
+                               logo_ico=str(resource_path("audyax.ico")))
         self.searching = False
         self.updating = False
         self._last_offered = ""     # last clipboard link already offered
