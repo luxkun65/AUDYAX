@@ -64,9 +64,11 @@ from motor_descarga import (
     info_archivo,
     leer_etiquetas,
     leer_portada,
+    nombre_archivo_valido,
     opciones_red,
     preparar_ffmpeg_incluido,
     puede_actualizarse,
+    renombrar_archivo,
     se_puede_editar,
     ultima_version_app,
     ultima_version_ytdlp,
@@ -601,7 +603,7 @@ class VentanaEtiquetas(ctk.CTkToplevel):
         super().__init__(app)
         self.app, self.vid, self.ruta = app, vid, ruta
         self.title("Editar etiquetas")
-        self.geometry("640x400")
+        self.geometry("660x470")
         self.resizable(False, False)
         self.transient(app)
         self.configure(fg_color=C["bg"])
@@ -638,6 +640,31 @@ class VentanaEtiquetas(ctk.CTkToplevel):
                          fg_color=C["input"], border_color=C["borde"], text_color=C["texto"]).grid(
                 row=i, column=1, sticky="ew", pady=5)
 
+        # Nombre del archivo (sin extensión). Si hoy coincide con el título, lo sigue al
+        # cambiar el título, hasta que el usuario lo escriba a mano.
+        fila = len(self.CAMPOS)
+        ctk.CTkLabel(der, text="Archivo", font=app.f_neg, anchor="w").grid(
+            row=fila, column=0, sticky="w", padx=(0, 12), pady=(14, 5))
+        caja = ctk.CTkFrame(der, fg_color="transparent")
+        caja.grid(row=fila, column=1, sticky="ew", pady=(14, 5))
+        caja.grid_columnconfigure(0, weight=1)
+        self.extension = Path(ruta).suffix
+        self.var_archivo = tk.StringVar(value=limpiar_tk(Path(ruta).stem))
+        self.e_archivo = ctk.CTkEntry(caja, textvariable=self.var_archivo, height=34, corner_radius=10,
+                                      font=app.f_norm, fg_color=C["input"], border_color=C["borde"],
+                                      text_color=C["texto"])
+        self.e_archivo.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(caja, text=self.extension, font=app.f_norm, text_color=C["suave"]).grid(
+            row=0, column=1, padx=(6, 0))
+        self.l_nombre = ctk.CTkLabel(der, text="", font=app.f_peq, text_color=C["suave"], anchor="w",
+                                     justify="left", wraplength=330)
+        self.l_nombre.grid(row=fila + 1, column=1, sticky="w")
+        self.sigue_titulo = Path(ruta).stem == nombre_archivo_valido(actuales.get("titulo", ""))
+        self.e_archivo._entry.bind("<Key>", lambda e: setattr(self, "sigue_titulo", False), add=True)
+        self.vars["titulo"].trace_add("write", self._titulo_cambio)
+        self.var_archivo.trace_add("write", lambda *a: self._mostrar_nombre_final())
+        self._mostrar_nombre_final()
+
         pie = ctk.CTkFrame(self, fg_color="transparent")
         pie.pack(fill="x", padx=18, pady=12)
         app._boton(pie, "Guardar", self._guardar, acento=True, width=120, height=36).pack(side="right")
@@ -645,6 +672,22 @@ class VentanaEtiquetas(ctk.CTkToplevel):
         self.bind("<Return>", lambda e: self._guardar())
         self.bind("<Escape>", lambda e: self.destroy())
         self.after(150, self.focus)
+
+    def _titulo_cambio(self, *_):
+        if self.sigue_titulo:
+            self.var_archivo.set(nombre_archivo_valido(self.vars["titulo"].get()))
+
+    def _mostrar_nombre_final(self):
+        """Avisa si el nombre se va a guardar distinto (caracteres no permitidos) o si queda vacío."""
+        escrito = self.var_archivo.get().strip()
+        final = nombre_archivo_valido(escrito, self.extension)
+        if not final:
+            texto = "El nombre no puede quedar vacío."
+        elif final != escrito:
+            texto = f"Se guardará como: {corto(final + self.extension, 60)}"
+        else:
+            texto = ""
+        self.l_nombre.configure(text=texto, text_color=C["rojo"] if not final else C["suave"])
 
     def _mostrar_portada(self, datos: bytes):
         try:
@@ -670,12 +713,28 @@ class VentanaEtiquetas(ctk.CTkToplevel):
 
     def _guardar(self):
         datos = {k: v.get().strip() for k, v in self.vars.items()}
+        nombre = nombre_archivo_valido(self.var_archivo.get(), self.extension)
+        if not nombre:
+            messagebox.showerror("Nombre no válido", "El nombre del archivo no puede quedar vacío.", parent=self)
+            return
         try:
             escribir_etiquetas(self.ruta, datos, self.portada_nueva)
         except Exception as e:
             messagebox.showerror("No se pudieron guardar las etiquetas", str(e), parent=self)
             return
-        self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva)
+        # Primero las etiquetas, luego el nombre: si renombrar falla, lo demás ya quedó guardado
+        try:
+            nueva = renombrar_archivo(self.ruta, nombre)
+        except (OSError, ValueError) as e:
+            self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva)
+            self.portada_nueva = None
+            detalle = str(e) if isinstance(e, (FileExistsError, ValueError)) else (
+                f"{e}\n\n¿Está abierto en un reproductor? Ciérralo e inténtalo de nuevo.")
+            messagebox.showerror("No se pudo cambiar el nombre",
+                                 f"Las etiquetas sí se guardaron, pero el archivo no se renombró.\n\n{detalle}",
+                                 parent=self)
+            return
+        self.app._etiquetas_guardadas(self.vid, datos, self.portada_nueva, str(nueva))
         self.destroy()
 
 
@@ -2165,12 +2224,12 @@ class App(ctk.CTk, *_BASES_DND):
         except Exception as e:
             messagebox.showerror("No se pudo leer el archivo", str(e))
 
-    def _etiquetas_guardadas(self, vid, datos, portada):
+    def _etiquetas_guardadas(self, vid, datos, portada, ruta=None):
         f = self.filas.get(vid)
         if not f:
             return
         f.update(datos=None, datos_pedidos=False)  # el tamaño del archivo cambia
-        self._fila(vid, **datos)
+        self._fila(vid, **datos, **({"ruta": ruta} if ruta else {}))
         if portada:
             self._poner_imagen(vid, portada)
 
