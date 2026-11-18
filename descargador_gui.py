@@ -1926,7 +1926,17 @@ class App(ctk.CTk, *_BASES_DND):
         menu.add_command(label="Lista de reproducción (.m3u) de las descargadas", command=self._exportar_m3u)
         menu.add_command(label="Tabla (.csv) de la lista", command=self._exportar_csv)
         b = self.btn_exportar
-        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+        self._mostrar_menu(menu, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height() + 3)
+
+    @staticmethod
+    def _mostrar_menu(menu: tk.Menu, x: int, y: int):
+        """Abre un menú en (x, y). En Windows y macOS se usa post(): con tk_popup(), un menú
+        abierto desde un botón (y no desde el clic derecho) no llega a aparecer en Windows.
+        Es lo mismo que hace customtkinter con sus listas desplegables."""
+        if sys.platform.startswith("win") or sys.platform == "darwin":
+            menu.post(int(x), int(y))
+        else:
+            menu.tk_popup(int(x), int(y))
 
     def _exportar_m3u(self):
         canciones = [self.filas[v] for v in self._filas_en_vista()
@@ -1946,7 +1956,7 @@ class App(ctk.CTk, *_BASES_DND):
         except OSError as e:
             messagebox.showerror("No se pudo exportar", str(e))
             return
-        messagebox.showinfo("Exportar", f"Lista guardada con {n} canciones:\n{ruta}")
+        messagebox.showinfo("Exportar", f"Lista guardada con {n} {'canción' if n == 1 else 'canciones'}:\n{ruta}")
 
     def _exportar_csv(self):
         orden = self._filas_en_vista()
