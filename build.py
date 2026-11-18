@@ -70,7 +70,7 @@ def pyinstaller_args() -> list:
 def copy_ffmpeg(source: Path, dest: Path) -> bool:
     exe = ".exe" if IS_WINDOWS else ""
     if not (source / f"ffmpeg{exe}").is_file():
-        print(f"AVISO: no hay ffmpeg{exe} en {source}; el programa necesitará FFmpeg instalado.")
+        print(f"WARNING: no ffmpeg{exe} in {source}; the program will need FFmpeg installed.")
         return False
     dest.mkdir(parents=True, exist_ok=True)
     for file in source.iterdir():
@@ -78,7 +78,7 @@ def copy_ffmpeg(source: Path, dest: Path) -> bool:
         if file.is_file() and (file.stem in ("ffmpeg", "ffprobe") or file.suffix.lower() == ".dll"
                                   or file.name.upper().startswith("LICENSE")):
             shutil.copy2(file, dest / file.name)
-    print(f"FFmpeg incluido desde {source}")
+    print(f"FFmpeg bundled from {source}")
     return True
 
 
@@ -98,8 +98,8 @@ def main():
         system = "windows" if IS_WINDOWS else ("macos" if sys.platform == "darwin" else "linux")
         base = ROOT / "dist" / f"AUDYAX-{VERSION}-{system}"
         file = shutil.make_archive(str(base), "zip", root_dir=folder.parent, base_dir=folder.name)
-        print(f"Listo: {file}")
-    print(f"Programa en: {folder}")
+        print(f"Done: {file}")
+    print(f"Program in: {folder}")
 
 
 if __name__ == "__main__":

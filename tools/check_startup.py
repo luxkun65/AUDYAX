@@ -24,9 +24,9 @@ def main():
             if "AUDYAX" not in path or "ffmpeg" not in path.lower():
                 errors.append(f"{key} no es el incluido en el programa: {path!r}")
     if errors:
-        print("\nFALTA:\n  " + "\n  ".join(errors))
+        print("\nMISSING:\n  " + "\n  ".join(errors))
         sys.exit(1)
-    print("\nEl ejecutable arranca y trae todo lo necesario.")
+    print("\nThe executable starts and ships everything it needs.")
 
 
 if __name__ == "__main__":

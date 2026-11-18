@@ -21,11 +21,11 @@ TARGET_DIR = Path(__file__).resolve().parent.parent / "vendor" / "ffmpeg"
 
 
 def main():
-    print(f"Descargando {URL} …")
+    print(f"Downloading {URL} …")
     with urllib.request.urlopen(urllib.request.Request(URL, headers={"User-Agent": "AUDYAX"}),
                                 timeout=300) as r:
         data = r.read()
-    print(f"{len(data) / 1048576:.0f} MB descargados")
+    print(f"{len(data) / 1048576:.0f} MB downloaded")
     if TARGET_DIR.exists():
         shutil.rmtree(TARGET_DIR)
     TARGET_DIR.mkdir(parents=True)
@@ -39,7 +39,7 @@ def main():
     files = sorted(p.name for p in TARGET_DIR.iterdir())
     if "ffmpeg.exe" not in files:
         sys.exit("No se encontró ffmpeg.exe en el archivo descargado")
-    print(f"FFmpeg listo en {TARGET_DIR} ({len(files)} archivos)")
+    print(f"FFmpeg ready in {TARGET_DIR} ({len(files)} files)")
 
 
 if __name__ == "__main__":
