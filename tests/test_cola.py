@@ -68,12 +68,12 @@ def test_resolver_parte_las_playlists_en_canciones(tmp_path, monkeypatch):
     entradas = [{"id": f"v{i}", "titulo": f"T{i}", "url": f"https://www.youtube.com/watch?v=v{i}",
                  "miniatura": ""} for i in range(3)]
     monkeypatch.setattr(m, "analizar_url",
-                        lambda url, carpeta, sub: (carpeta / "Lista", entradas, True, "Lista"))
+                        lambda url, carpeta, sub, *a: (carpeta / "Lista", entradas, True, "Lista"))
     plan = m.resolver("https://www.youtube.com/playlist?list=PL1", tmp_path)
     assert plan["por_cancion"] and plan["album_defecto"] == "Lista"
     assert plan["urls"] == [e["url"] for e in entradas]
 
-    monkeypatch.setattr(m, "analizar_url", lambda url, carpeta, sub: (carpeta, entradas[:1], False, ""))
+    monkeypatch.setattr(m, "analizar_url", lambda url, carpeta, sub, *a: (carpeta, entradas[:1], False, ""))
     plan = m.resolver("https://youtu.be/v0", tmp_path)
     assert not plan["por_cancion"] and plan["urls"] == ["https://youtu.be/v0"]
 
@@ -146,7 +146,7 @@ def _plan_playlist(base, n=4):
     entradas = [{"id": f"pista{i}", "titulo": f"Pista {i}", "artista": "A", "album": "",
                  "url": f"{base}/pista{i}.m4a", "miniatura": ""} for i in range(1, n + 1)]
 
-    def resolver(url, carpeta, sub="", log=None):
+    def resolver(url, carpeta, sub="", log=None, red=None):
         return {"destino": carpeta / "Lista", "entradas": entradas, "es_playlist": True,
                 "urls": [e["url"] for e in entradas],
                 "extras": {e["id"]: {"titulo": e["titulo"], "artista": "A", "album": ""} for e in entradas},

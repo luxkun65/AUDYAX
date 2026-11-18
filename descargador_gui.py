@@ -11,9 +11,12 @@ Requisitos:
 
 Uso:  python descargador_gui.py
 """
+import json
+import logging
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -30,9 +33,21 @@ from tkinter import font as tkfont
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 
+from escritorio import (
+    Bandeja,
+    bandeja_disponible,
+    motivo_sin_bandeja,
+    notificaciones_disponibles,
+    notificar,
+    resumen_lote,
+)
 from motor_descarga import (
+    CONFIG_POR_DEFECTO,
     HAY_MUTAGEN,
     MAX_SIMULTANEAS,
+    NAVEGADORES_COOKIES,
+    PROXY_VALIDO,
+    VERSION,
     DownloadCancelled,
     actualizar_ytdlp,
     buscar,
@@ -49,8 +64,11 @@ from motor_descarga import (
     info_archivo,
     leer_etiquetas,
     leer_portada,
+    opciones_red,
+    preparar_ffmpeg_incluido,
     puede_actualizarse,
     se_puede_editar,
+    ultima_version_app,
     ultima_version_ytdlp,
     version_ytdlp,
 )
@@ -269,6 +287,23 @@ def portada_jpeg(img: Image.Image, cuadrada: bool, lado_max: int = 1200) -> byte
     salida = BytesIO()
     img.save(salida, "JPEG", quality=90)
     return salida.getvalue()
+
+
+def ruta_recurso(nombre: str) -> Path:
+    """Archivo de la carpeta assets/, tanto ejecutando con Python como desde el .exe."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / "assets" / nombre
+
+
+# Atajos de teclado (también se muestran en "Acerca de")
+ATAJOS = [("Ctrl+V", "Pegar un enlace copiado y descargarlo"),
+          ("Supr", "Quitar de la lista las canciones seleccionadas (no borra archivos)"),
+          ("Ctrl+F", "Buscar en la lista"),
+          ("Enter", "Descargar o buscar lo escrito en el cuadro de enlace")]
+
+# Opciones del menú de cookies: texto -> valor guardado
+ORIGENES_COOKIES = {"Firefox (recomendado)": "firefox", "Archivo cookies.txt": "archivo"}
+ORIGENES_COOKIES.update({n.capitalize(): n for n in NAVEGADORES_COOKIES if n != "firefox"})
 
 
 def descargar_bytes(url: str, timeout: int = 10) -> bytes:
@@ -661,6 +696,7 @@ class App(ctk.CTk, *_BASES_DND):
             except Exception:  # tkdnd no disponible en este sistema: sin arrastrar/soltar
                 pass
         self.title("AUDYAX")
+        self._poner_icono_ventana()
         self.geometry("1180x800")
         self.minsize(1050, 640)
         self.configure(fg_color=C["bg"])
@@ -690,6 +726,13 @@ class App(ctk.CTk, *_BASES_DND):
         self._visibles = set()        # ids que pasan el filtro actual
         self._vista_programada = False
         self.ventana_resultados = None
+        self.lote = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
+        self._avisado_segundo_plano = False
+        self.bandeja = Bandeja(self._imagen_bandeja(),
+                               al_abrir=lambda: self.eventos.put(("bandeja", "abrir")),
+                               al_pausar=lambda: self.eventos.put(("bandeja", "pausa")),
+                               al_salir=lambda: self.eventos.put(("bandeja", "salir")),
+                               esta_en_pausa=lambda: self.pausa.is_set())
         self.buscando = False
         self.actualizando = False
         self._ultimo_ofrecido = ""     # último enlace del portapapeles que ya se ofreció
@@ -704,7 +747,8 @@ class App(ctk.CTk, *_BASES_DND):
         self.img_vacia_portada = imagen_vacia(160)
 
         self._construir()
-        self.protocol("WM_DELETE_WINDOW", self._cerrar)
+        self.protocol("WM_DELETE_WINDOW", self._al_cerrar_ventana)
+        self._configurar_atajos()
         self.after(100, self._procesar_eventos)
         self.after(400, self._revisar_ffmpeg)
         self.after(800, self._revisar_portapapeles)
@@ -978,14 +1022,26 @@ class App(ctk.CTk, *_BASES_DND):
     def _acerca_de(self):
         top = ctk.CTkToplevel(self)
         top.title("Acerca de AUDYAX")
-        top.geometry("340x230")
+        top.geometry("420x400")
         top.resizable(False, False)
         top.transient(self)
         top.configure(fg_color=C["bg"])
         ctk.CTkLabel(top, text="", image=icono("nota", 44, C["acento"])).pack(pady=(22, 4))
         ctk.CTkLabel(top, text="AUDYAX", font=self.f_det).pack()
-        ctk.CTkLabel(top, text="Usa yt-dlp, FFmpeg, mutagen,\ncustomtkinter y Pillow.", font=self.f_peq,
-                     text_color=C["suave"], justify="center").pack(pady=(4, 14))
+        ctk.CTkLabel(top, text=f"Versión {VERSION}  ·  yt-dlp {version_ytdlp()}", font=self.f_peq,
+                     text_color=C["suave"]).pack()
+        ctk.CTkLabel(top, text="Usa yt-dlp, FFmpeg, mutagen, ytmusicapi,\ncustomtkinter y Pillow.", font=self.f_peq,
+                     text_color=C["suave"], justify="center").pack(pady=(4, 10))
+        tabla = ctk.CTkFrame(top, fg_color=C["card"], corner_radius=10)
+        tabla.pack(padx=24, pady=(0, 12), fill="x")
+        ctk.CTkLabel(tabla, text="Atajos de teclado", font=self.f_neg).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
+        for i, (tecla, que) in enumerate(ATAJOS, 1):
+            ctk.CTkLabel(tabla, text=tecla, font=self.f_neg, text_color=C["acento"]).grid(
+                row=i, column=0, sticky="w", padx=(12, 10), pady=1)
+            ctk.CTkLabel(tabla, text=que, font=self.f_peq, wraplength=260, justify="left").grid(
+                row=i, column=1, sticky="w", padx=(0, 12), pady=1)
+        tabla.grid_rowconfigure(len(ATAJOS) + 1, minsize=8)
         self._boton(top, "Ver en GitHub", lambda: webbrowser.open(REPO_URL), icono("external", 16),
                     height=34).pack()
         self.after(150, top.focus)
@@ -1001,69 +1057,235 @@ class App(ctk.CTk, *_BASES_DND):
     def _configuracion(self):
         top = ctk.CTkToplevel(self)
         top.title("Configuración")
-        top.geometry("440x660")
-        top.resizable(False, False)
+        top.geometry("500x640")
+        top.resizable(False, True)
         top.transient(self)
         top.configure(fg_color=C["bg"])
-        ctk.CTkLabel(top, text="Apariencia", font=self.f_neg).pack(anchor="w", padx=20, pady=(20, 6))
+        pestanas = ctk.CTkTabview(top, fg_color=C["card"], corner_radius=14, border_width=1,
+                                  border_color=C["borde"], segmented_button_fg_color=C["card2"],
+                                  segmented_button_selected_color=C["acento"],
+                                  segmented_button_selected_hover_color=C["acento_hover"],
+                                  segmented_button_unselected_color=C["card2"],
+                                  segmented_button_unselected_hover_color=C["hover"],
+                                  text_color=C["texto"])
+        pestanas.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        self.pestanas_config = pestanas
+
+        def pestana(nombre):
+            pestanas.add(nombre)
+            marco = ctk.CTkScrollableFrame(pestanas.tab(nombre), fg_color="transparent")
+            marco.pack(fill="both", expand=True)
+            return marco
+        self._pestana_general(pestana("General"))
+        self._pestana_descargas(pestana("Descargas"))
+        self._pestana_avanzado(pestana("Avanzado"))
+        pestanas.set("General")
+        self.after(150, top.focus)
+
+    # Piezas comunes de la ventana de configuración
+    def _titulo_cfg(self, padre, texto, primero=False):
+        ctk.CTkLabel(padre, text=texto, font=self.f_neg).pack(anchor="w", padx=12, pady=(6 if primero else 18, 6))
+
+    def _nota_cfg(self, padre, texto, color=None):
+        lbl = ctk.CTkLabel(padre, text=texto, font=self.f_peq, text_color=color or C["suave"],
+                           wraplength=385, justify="left", anchor="w")
+        lbl.pack(anchor="w", padx=12, pady=(2, 0), fill="x")
+        return lbl
+
+    def _interruptor_cfg(self, padre, texto, clave, al_cambiar=None, estado="normal"):
+        var = tk.BooleanVar(value=bool(self.cfg.get(clave, CONFIG_POR_DEFECTO.get(clave))))
+
+        def cambiar():
+            self.cfg[clave] = bool(var.get())
+            guardar_config(self._cfg_actual())
+            if al_cambiar:
+                al_cambiar()
+        sw = ctk.CTkSwitch(padre, text=texto, variable=var, command=cambiar, font=self.f_norm,
+                           progress_color=C["acento"], state=estado)
+        sw.pack(anchor="w", padx=12, pady=(6, 2))
+        return var
+
+    def _campo_cfg(self, padre, ancho=200, **kw):
+        return ctk.CTkEntry(padre, width=ancho, height=32, corner_radius=10, font=self.f_norm,
+                            fg_color=C["input"], border_color=C["borde"], text_color=C["texto"], **kw)
+
+    def _pestana_general(self, t):
+        self._titulo_cfg(t, "Apariencia", primero=True)
         seg = ctk.CTkSegmentedButton(
-            top, values=["Claro", "Oscuro"], font=self.f_norm, selected_color=C["acento"],
+            t, values=["Claro", "Oscuro"], font=self.f_norm, selected_color=C["acento"],
             selected_hover_color=C["acento_hover"], unselected_color=C["card2"],
             unselected_hover_color=C["hover"], text_color=C["texto"],
             command=lambda v: self._aplicar_tema("dark" if v == "Oscuro" else "light"))
         seg.set("Oscuro" if self.tema == "dark" else "Claro")
-        seg.pack(anchor="w", padx=20)
-        ctk.CTkLabel(top, text="Archivos del programa", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
-        fila = ctk.CTkFrame(top, fg_color="transparent")
-        fila.pack(anchor="w", padx=20)
+        seg.pack(anchor="w", padx=12)
+
+        self._titulo_cfg(t, "Notificaciones y bandeja del sistema")
+        hay_notif, hay_bandeja = notificaciones_disponibles(), bandeja_disponible()
+        self._interruptor_cfg(t, "Avisarme cuando terminen las descargas", "notificaciones",
+                              estado="normal" if hay_notif else "disabled")
+        self._nota_cfg(t, "Solo avisa si AUDYAX no está en primer plano (minimizado, en la bandeja "
+                          "o detrás de otra ventana)." if hay_notif else
+                       "No disponible: falta la librería plyer (pip install plyer).")
+        self._interruptor_cfg(t, "Seguir en segundo plano al cerrar (X)", "segundo_plano",
+                              estado="normal" if hay_bandeja else "disabled")
+        self._nota_cfg(t, "Al cerrar la ventana, AUDYAX sigue abierto junto al reloj (y sigue "
+                          "descargando). Clic en su icono para volver; para salir del todo: clic "
+                          "derecho en el icono → Salir. Minimizar funciona como siempre."
+                       if hay_bandeja else "No disponible en este sistema (" + (motivo_sin_bandeja() or
+                                                                                  "falta pystray") + ").")
+
+        self._titulo_cfg(t, "Portapapeles")
+        self._interruptor_cfg(t, "Ofrecer pegar los enlaces de YouTube copiados", "detectar_portapapeles")
+
+        self._titulo_cfg(t, "Archivos del programa")
+        fila = ctk.CTkFrame(t, fg_color="transparent")
+        fila.pack(anchor="w", padx=12)
         self._boton(fila, "Abrir log", lambda: self._abrir_archivo_carpeta("descarga.log"), height=32).pack(
             side="left", padx=(0, 8))
         self._boton(fila, "Faltantes", lambda: self._abrir_archivo_carpeta("faltantes.txt"), height=32).pack(
             side="left")
 
-        self._seccion_organizar(top)
+    def _pestana_descargas(self, t):
+        self._seccion_organizar(t)
 
-        ctk.CTkLabel(top, text="Descargas simultáneas", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
+        self._titulo_cfg(t, "Descargas simultáneas")
         seg_n = ctk.CTkSegmentedButton(
-            top, values=[str(i) for i in range(1, MAX_SIMULTANEAS + 1)], font=self.f_norm,
+            t, values=[str(i) for i in range(1, MAX_SIMULTANEAS + 1)], font=self.f_norm,
             selected_color=C["acento"], selected_hover_color=C["acento_hover"],
             unselected_color=C["card2"], unselected_hover_color=C["hover"], text_color=C["texto"],
             command=lambda v: self._cambiar_simultaneas(int(v)))
         seg_n.set(str(descargas_simultaneas(self.cfg)))
-        seg_n.pack(anchor="w", padx=20)
-        ctk.CTkLabel(top, text="Canciones que se bajan a la vez. Con más, YouTube puede frenar las descargas.",
-                     font=self.f_peq, text_color=C["suave"], wraplength=400, justify="left").pack(
-            anchor="w", padx=20, pady=(4, 0))
+        seg_n.pack(anchor="w", padx=12)
+        self._nota_cfg(t, "Canciones que se bajan a la vez. Con más, YouTube puede frenar las descargas.")
 
-        ctk.CTkLabel(top, text="Portapapeles", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
-        var_pp = tk.BooleanVar(value=self.cfg.get("detectar_portapapeles", True))
+        self._titulo_cfg(t, "Actualizaciones")
+        if puede_actualizarse():
+            self._nota_cfg(t, f"AUDYAX {VERSION}  ·  yt-dlp {version_ytdlp()}")
+        else:
+            self._nota_cfg(t, f"AUDYAX {VERSION} (incluye yt-dlp {version_ytdlp()})")
+        self._interruptor_cfg(t, "Avisar al abrir si hay una versión nueva", "revisar_ytdlp")
+        self._boton(t, "Buscar actualización", lambda: self._revisar_ytdlp(manual=True),
+                    icono("refresh", 16), height=32).pack(anchor="w", padx=12, pady=(10, 0))
 
-        def cambiar_pp():
-            self.cfg["detectar_portapapeles"] = bool(var_pp.get())
+    def _pestana_avanzado(self, t):
+        """Opciones avanzadas. Todas vienen apagadas; solo actúan si se encienden."""
+        self._nota_cfg(t, "Estas opciones vienen apagadas. Actívalas solo si las necesitas.")
+        dependientes = []  # (interruptor BooleanVar, [widgets que dependen de él])
+
+        def refrescar():
+            for var, widgets in dependientes:
+                for w in widgets:
+                    w.configure(state="normal" if var.get() else "disabled")
+            mostrar_archivo()
+            validar_proxy()
+
+        # 1) Límite de velocidad
+        self._titulo_cfg(t, "Límite de velocidad")
+        var_vel = self._interruptor_cfg(t, "Limitar la velocidad de descarga", "limite_velocidad_activo",
+                                        al_cambiar=refrescar)
+        fila = ctk.CTkFrame(t, fg_color="transparent")
+        fila.pack(anchor="w", padx=12, pady=(4, 0))
+        var_mb = tk.StringVar(value=str(self.cfg.get("limite_velocidad_mb", 2.0)))
+        e_mb = self._campo_cfg(fila, 70, textvariable=var_mb)
+        e_mb.pack(side="left")
+        ctk.CTkLabel(fila, text="MB/s en total", font=self.f_norm).pack(side="left", padx=8)
+        self._nota_cfg(t, "Para que una playlist grande no te deje sin internet para lo demás. "
+                          "Se reparte entre las descargas simultáneas.")
+        dependientes.append((var_vel, [e_mb]))
+
+        def guardar_mb(*_):
+            try:
+                valor = float(var_mb.get().replace(",", "."))
+            except ValueError:
+                return
+            if valor > 0:
+                self.cfg["limite_velocidad_mb"] = valor
+                guardar_config(self._cfg_actual())
+        var_mb.trace_add("write", guardar_mb)
+
+        # 2) Proxy
+        self._titulo_cfg(t, "Proxy")
+        var_px = self._interruptor_cfg(t, "Usar un proxy", "proxy_activo", al_cambiar=refrescar)
+        var_proxy = tk.StringVar(value=self.cfg.get("proxy", ""))
+        e_px = self._campo_cfg(t, 420, textvariable=var_proxy)
+        e_px.pack(anchor="w", padx=12, pady=(4, 0))
+        error_px = ctk.CTkLabel(t, text="", font=self.f_peq, text_color=C["rojo"], wraplength=385,
+                                justify="left", anchor="w")
+        ayuda_px = self._nota_cfg(t, "Ejemplo: http://servidor:8080  o  socks5://127.0.0.1:1080. "
+                                     "Para redes que bloquean YouTube o videos bloqueados en tu país; se usa "
+                                     "en descargas, búsquedas y playlists de YouTube Music.")
+        dependientes.append((var_px, [e_px]))
+
+        def validar_proxy(*_):
+            texto = var_proxy.get().strip()
+            malo = bool(var_px.get()) and texto and not PROXY_VALIDO.match(texto)
+            error = ("Formato no válido: usa http://, https://, socks4:// o socks5:// seguido de "
+                     "servidor:puerto." if malo else
+                     ("Escribe la dirección del proxy." if var_px.get() and not texto else ""))
+            error_px.configure(text=error)
+            if error:  # el aviso rojo solo ocupa espacio cuando hay algo que decir
+                error_px.pack(anchor="w", padx=12, pady=(2, 0), fill="x", before=ayuda_px)
+            else:
+                error_px.pack_forget()
+            self.cfg["proxy"] = texto
             guardar_config(self._cfg_actual())
-        ctk.CTkSwitch(top, text="Ofrecer pegar los enlaces de YouTube copiados", variable=var_pp,
-                      command=cambiar_pp, font=self.f_norm, progress_color=C["acento"]).pack(
-            anchor="w", padx=20)
+        var_proxy.trace_add("write", validar_proxy)
 
-        ctk.CTkLabel(top, text="yt-dlp (motor de descarga)", font=self.f_neg).pack(
-            anchor="w", padx=20, pady=(18, 2))
-        ctk.CTkLabel(top, text=f"Versión instalada: {version_ytdlp()}", font=self.f_peq,
-                     text_color=C["suave"]).pack(anchor="w", padx=20, pady=(0, 6))
-        var_yt = tk.BooleanVar(value=self.cfg.get("revisar_ytdlp", True))
+        # 3) Cookies
+        self._titulo_cfg(t, "Cookies (videos con restricción de edad)")
+        var_ck = self._interruptor_cfg(t, "Usar mi sesión de YouTube", "cookies_activo", al_cambiar=refrescar)
+        por_valor = {v: k for k, v in ORIGENES_COOKIES.items()}
+        var_origen = tk.StringVar(value=por_valor.get(self.cfg.get("cookies_origen", "firefox"),
+                                                      "Firefox (recomendado)"))
+        fila_ck = ctk.CTkFrame(t, fg_color="transparent")
+        fila_ck.pack(anchor="w", padx=12, pady=(4, 0))
+        ctk.CTkLabel(fila_ck, text="Tomarla de:", font=self.f_norm).pack(side="left", padx=(0, 8))
+        menu_ck = ctk.CTkOptionMenu(
+            fila_ck, variable=var_origen, values=list(ORIGENES_COOKIES), width=210, height=32,
+            font=self.f_norm, dropdown_font=self.f_norm, fg_color=C["input"], button_color=C["card2"],
+            button_hover_color=C["hover"], text_color=C["texto"], dropdown_fg_color=C["card"],
+            dropdown_text_color=C["texto"], dropdown_hover_color=C["hover"],
+            command=lambda v: (self.cfg.__setitem__("cookies_origen", ORIGENES_COOKIES[v]),
+                               guardar_config(self._cfg_actual()), mostrar_archivo()))
+        menu_ck.pack(side="left")
+        fila_arch = ctk.CTkFrame(t, fg_color="transparent")
+        var_arch = tk.StringVar(value=self.cfg.get("cookies_archivo", ""))
+        e_arch = self._campo_cfg(fila_arch, 300, textvariable=var_arch, placeholder_text="cookies.txt")
+        e_arch.pack(side="left")
 
-        def cambiar_yt():
-            self.cfg["revisar_ytdlp"] = bool(var_yt.get())
-            guardar_config(self._cfg_actual())
-        ctk.CTkSwitch(top, text="Avisar al abrir si hay una versión nueva", variable=var_yt,
-                      command=cambiar_yt, font=self.f_norm, progress_color=C["acento"]).pack(
-            anchor="w", padx=20)
-        self._boton(top, "Buscar actualización", lambda: self._revisar_ytdlp(manual=True),
-                    icono("refresh", 16), height=32).pack(anchor="w", padx=20, pady=(10, 0))
-        self.after(150, top.focus)
+        def elegir_archivo():
+            ruta = filedialog.askopenfilename(parent=t.winfo_toplevel(), title="Elige tu archivo cookies.txt",
+                                              filetypes=[("Cookies", "*.txt"), ("Todos", "*.*")])
+            if ruta:
+                var_arch.set(ruta)
+                self.cfg["cookies_archivo"] = ruta
+                guardar_config(self._cfg_actual())
+        b_arch = self._boton(fila_arch, "Elegir…", elegir_archivo, icono("folder", 16), height=32, width=90)
+        b_arch.pack(side="left", padx=8)
+        aviso_ck = self._nota_cfg(t, "")
+        self._nota_cfg(t, "Usar tu cuenta con programas de descarga puede hacer que YouTube la limite. "
+                          "Si puedes, usa una cuenta secundaria (mayor de edad).", color=COLORES["amarillo"])
+        dependientes.append((var_ck, [menu_ck, e_arch, b_arch]))
+
+        def mostrar_archivo():
+            origen = self.cfg.get("cookies_origen", "firefox")
+            if origen == "archivo":
+                fila_arch.pack(anchor="w", padx=12, pady=(6, 0), after=fila_ck)
+                aviso_ck.configure(text="Un archivo cookies.txt (formato Netscape) exportado con una "
+                                        "extensión del navegador, p. ej. «Get cookies.txt LOCALLY».")
+            else:
+                fila_arch.pack_forget()
+                aviso_ck.configure(text=(
+                    "Firefox funciona bien: basta con haber iniciado sesión en YouTube en Firefox."
+                    if origen == "firefox" else
+                    "Ojo: en Windows, Chrome, Edge y demás navegadores basados en Chromium ya no dejan "
+                    "que otros programas lean sus cookies. Si falla, usa Firefox o un archivo cookies.txt."))
+
+        refrescar()
 
     def _seccion_organizar(self, top):
         """Configuración > Organizar descargas (desactivado por defecto: todo junto)."""
-        ctk.CTkLabel(top, text="Organizar descargas", font=self.f_neg).pack(anchor="w", padx=20, pady=(18, 6))
+        self._titulo_cfg(top, "Organizar descargas", primero=True)
         actual = self.cfg.get("organizar", "plano")
         if actual not in ORGANIZAR:
             actual = "plano"
@@ -1086,10 +1308,10 @@ class App(ctk.CTk, *_BASES_DND):
                           height=32, font=self.f_norm, dropdown_font=self.f_norm, fg_color=C["input"],
                           button_color=C["card2"], button_hover_color=C["hover"], text_color=C["texto"],
                           dropdown_fg_color=C["card"], dropdown_text_color=C["texto"],
-                          dropdown_hover_color=C["hover"], command=aplicar).pack(anchor="w", padx=20)
-        ejemplo.pack(anchor="w", padx=20, pady=(6, 6))
+                          dropdown_hover_color=C["hover"], command=aplicar).pack(anchor="w", padx=12)
+        ejemplo.pack(anchor="w", padx=12, pady=(6, 6))
         sw_pl.configure(command=aplicar)
-        sw_pl.pack(anchor="w", padx=20)
+        sw_pl.pack(anchor="w", padx=12)
         aplicar()
 
     def _abrir_archivo_carpeta(self, nombre):
@@ -1156,6 +1378,9 @@ class App(ctk.CTk, *_BASES_DND):
             "organizar": self.cfg.get("organizar", "plano"),
             "playlists_en_carpeta": bool(self.cfg.get("playlists_en_carpeta", True)),
             "descargas_simultaneas": descargas_simultaneas(self.cfg),
+            **{k: self.cfg.get(k, CONFIG_POR_DEFECTO[k]) for k in (
+                "notificaciones", "segundo_plano", "limite_velocidad_activo", "limite_velocidad_mb",
+                "proxy_activo", "proxy", "cookies_activo", "cookies_origen", "cookies_archivo")},
         }
 
     def _descargar(self):
@@ -1188,7 +1413,7 @@ class App(ctk.CTk, *_BASES_DND):
 
         def trabajo():
             try:
-                self.eventos.put(("busqueda", texto, buscar(texto, 15)))
+                self.eventos.put(("busqueda", texto, buscar(texto, 15, opciones_red(self.cfg))))
             except Exception as e:
                 self.eventos.put(("busqueda_error", texto, str(e)))
         threading.Thread(target=trabajo, daemon=True).start()
@@ -1247,6 +1472,22 @@ class App(ctk.CTk, *_BASES_DND):
 
     # ---------------------------------------------------------------- yt-dlp
     def _revisar_ytdlp(self, manual: bool):
+        if not puede_actualizarse():
+            # En el .exe yt-dlp va dentro del programa: lo que se actualiza es AUDYAX entero
+            def trabajo_app():
+                try:
+                    ultima = ultima_version_app()
+                except Exception as e:
+                    if manual:
+                        self.eventos.put(("ytdlp_sin_conexion", str(e)))
+                    return
+                if es_mas_nueva(ultima, VERSION):
+                    self.eventos.put(("app_nueva", VERSION, ultima))
+                elif manual:
+                    self.eventos.put(("app_al_dia",))
+            threading.Thread(target=trabajo_app, daemon=True).start()
+            return
+
         def trabajo():
             actual = version_ytdlp()
             try:
@@ -1320,6 +1561,8 @@ class App(ctk.CTk, *_BASES_DND):
         guardar_config(cfg)
         cfg["subcarpeta"] = subcarpeta  # p. ej. la carpeta de la playlist al reintentar
         cfg["extras"] = extras or {}    # título/artista/álbum a conservar (ver _reintentar)
+        if self.pendientes == 0:
+            self.lote = {"ok": 0, "err": 0, "omit": 0}  # empieza una tanda nueva
         self.pendientes += 1
         self.trabajos.put((url, cfg))
         self._asegurar_hilos()
@@ -1530,7 +1773,7 @@ class App(ctk.CTk, *_BASES_DND):
         barra.pack(fill="x", padx=8, pady=(8, 2))
         self.var_filtro = tk.StringVar()
         self.var_estado = tk.StringVar(value="Todas")
-        busq = ctk.CTkEntry(barra, textvariable=self.var_filtro, width=280, height=32, corner_radius=10,
+        self.busq = busq = ctk.CTkEntry(barra, textvariable=self.var_filtro, width=280, height=32, corner_radius=10,
                             placeholder_text="Buscar en la lista (título, artista, álbum)…", font=self.f_norm,
                             fg_color=C["input"], border_color=C["borde"], text_color=C["texto"])
         busq.pack(side="left")
@@ -1701,14 +1944,17 @@ class App(ctk.CTk, *_BASES_DND):
             if self.filas.get(ev[1], {}).get("color") != "rojo":
                 self._fila(ev[1], color="amarillo", texto=ev[2])
         elif tipo == "listo":
+            self.lote["ok"] += 1
             if ev[1] in self.filas:
                 self.filas[ev[1]]["cancelada"] = False  # terminó justo antes de cancelarla
             self._fila(ev[1], color="verde", texto="Descargada", motivo="", **ev[2])
         elif tipo == "rg":
             self._fila(ev[1], replaygain=ev[2])
         elif tipo == "omitida":
+            self.lote["omit"] += 1
             self._fila(ev[1], color="verde", texto="Ya descargada antes")
         elif tipo == "error":
+            self.lote["err"] += 1
             vid, motivo = ev[1], ev[2]
             if vid == "?":
                 self.errores_generales += 1
@@ -1732,6 +1978,8 @@ class App(ctk.CTk, *_BASES_DND):
             self.pendientes = max(0, self.pendientes - 1)
             if self.pendientes == 0 and self.pausa.is_set():
                 self._alternar_pausa()  # no queda nada en pausa
+            if self.pendientes == 0:
+                self._fin_lote()
             self._actualizar_botones()
         elif tipo == "busqueda":
             self._mostrar_resultados(ev[1], ev[2])
@@ -1744,6 +1992,14 @@ class App(ctk.CTk, *_BASES_DND):
                 v.poner_imagen(ev[1], ev[2])
         elif tipo == "ytdlp_nueva":
             self._ofrecer_actualizacion(ev[1], ev[2])
+        elif tipo == "app_nueva":
+            self.aviso_yt.mostrar(f"Hay una versión nueva de AUDYAX ({ev[2]}; tienes {ev[1]}).",
+                                  [("Más tarde", lambda: None, False),
+                                   ("Descargar", lambda: webbrowser.open(REPO_URL + "/releases/latest"), True)])
+        elif tipo == "app_al_dia":
+            messagebox.showinfo("AUDYAX", f"Ya tienes la última versión ({VERSION}).")
+        elif tipo == "bandeja":
+            self._accion_bandeja(ev[1])
         elif tipo == "ytdlp_al_dia":
             messagebox.showinfo("yt-dlp", f"Ya tienes la última versión ({ev[1]}).")
         elif tipo == "ytdlp_sin_conexion":
@@ -1792,10 +2048,19 @@ class App(ctk.CTk, *_BASES_DND):
 
     def _limpiar_lista(self):
         # Sin marcadas: se quitan las que se ven (p. ej. filtrando "Con error" se limpian los errores)
-        objetivo = self._marcadas() or [v for v in self.filas if v in self._visibles]
+        self._quitar_filas(self._marcadas() or [v for v in self.filas if v in self._visibles])
+
+    def _quitar_filas(self, objetivo):
+        """Quita filas de la lista (no borra archivos). Las que están en cola o bajándose se
+        dejan: primero hay que cancelarlas."""
+        en_curso = [v for v in objetivo if v in self.filas and self.filas[v]["color"] == "amarillo"]
+        if objetivo and len(en_curso) == len(objetivo):
+            messagebox.showinfo("Quitar de la lista",
+                                "Las canciones en cola o descargándose no se quitan: cancélalas primero (✕).")
+            return
         for vid in objetivo:
-            f = self.filas[vid]
-            if f["color"] == "amarillo":
+            f = self.filas.get(vid)
+            if f is None or f["color"] == "amarillo":
                 continue
             f["w"].destruir()
             liberar_variable(f["marca"])
@@ -1925,16 +2190,214 @@ class App(ctk.CTk, *_BASES_DND):
             # Se reintenta en la misma subcarpeta (la de su playlist, si venía de una)
             self._encolar(f["url"], f["subcarpeta"], extras)
 
+    # ---------------------------------------------------------------- icono, bandeja y avisos
+    def _poner_icono_ventana(self):
+        try:
+            if sys.platform.startswith("win") and ruta_recurso("audyax.ico").exists():
+                self.iconbitmap(default=str(ruta_recurso("audyax.ico")))
+            elif ruta_recurso("audyax.png").exists():
+                self._icono_tk = tk.PhotoImage(file=str(ruta_recurso("audyax.png")))
+                self.iconphoto(True, self._icono_tk)
+        except tk.TclError:
+            pass
+
+    def _imagen_bandeja(self) -> Image.Image:
+        try:
+            return Image.open(ruta_recurso("audyax.png")).convert("RGBA")
+        except OSError:
+            return _dibujar_icono("nota", "#a78bfa", 64)
+
+    def _ventana_activa(self) -> bool:
+        """True si el usuario está mirando AUDYAX (para no notificar en ese caso)."""
+        try:
+            return self.state() == "normal" and self.focus_displayof() is not None
+        except (tk.TclError, KeyError):
+            return False
+
+    def _fin_lote(self):
+        """Terminó todo lo que había en cola: notificación (si está activada y no se está mirando)."""
+        ok, err, omit = self.lote["ok"], self.lote["err"], self.lote["omit"]
+        self.lote = {"ok": 0, "err": 0, "omit": 0}
+        self._texto_bandeja()
+        if not self.cfg.get("notificaciones", True) or ok + err + omit == 0 or self._ventana_activa():
+            return
+        titulo = "AUDYAX: descargas terminadas" if not err else "AUDYAX: terminó con errores"
+        mensaje = resumen_lote(ok, err, omit)
+        if not self.bandeja.notificar(titulo, mensaje):
+            notificar(titulo, mensaje, str(ruta_recurso("audyax.ico")))
+
+    def _texto_bandeja(self):
+        if self.bandeja.visible:
+            en_curso = sum(1 for f in self.filas.values() if f["color"] == "amarillo")
+            self.bandeja.actualizar_texto(f"AUDYAX — {en_curso} en proceso" if en_curso else "AUDYAX")
+
+    def _a_bandeja(self) -> bool:
+        """Esconde la ventana y deja AUDYAX como icono junto al reloj."""
+        if not self.bandeja.mostrar("AUDYAX"):
+            return False
+        self.withdraw()
+        self._texto_bandeja()
+        return True
+
+    def _desde_bandeja(self):
+        self.bandeja.ocultar()
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        try:
+            self.focus_force()
+        except tk.TclError:
+            pass
+
+    def _accion_bandeja(self, accion: str):
+        if accion == "abrir":
+            self._desde_bandeja()
+        elif accion == "pausa":
+            if self.pendientes or self.pausa.is_set():
+                self._alternar_pausa()
+        elif accion == "salir":
+            if self.pendientes:
+                self._desde_bandeja()
+                if not messagebox.askyesno("Salir", "Hay descargas en curso. ¿Cancelarlas y cerrar AUDYAX?"):
+                    return
+            self._cerrar()
+
+    # ---------------------------------------------------------------- atajos de teclado
+    def _configurar_atajos(self):
+        # En el cuadro de enlace, Ctrl+V va primero aquí (antes del pegado normal del cuadro)
+        for tecla in ("<Control-v>", "<Control-V>"):
+            self.entrada._entry.bind(tecla, lambda e: self._atajo_pegar(en_entrada=True), add=True)
+            self.bind(tecla, lambda e: self._atajo_pegar())
+        self.bind("<Delete>", self._atajo_suprimir)
+        for tecla in ("<Control-f>", "<Control-F>"):
+            self.bind(tecla, self._atajo_buscar)
+        if sys.platform == "darwin":
+            self.entrada._entry.bind("<Command-v>", lambda e: self._atajo_pegar(en_entrada=True), add=True)
+            self.bind("<Command-v>", lambda e: self._atajo_pegar())
+            self.bind("<Command-f>", self._atajo_buscar)
+
+    def _foco_en_texto(self) -> bool:
+        """True si el cursor está en un cuadro de texto (ahí las teclas hacen lo normal)."""
+        try:
+            w = self.focus_get()
+        except (KeyError, tk.TclError):
+            return False
+        return w is not None and w.winfo_class() in ("Entry", "TEntry", "Text")
+
+    def _atajo_pegar(self, en_entrada: bool = False):
+        """Ctrl+V: si lo copiado es un enlace, se descarga directamente.
+        - Escribiendo en otro cuadro (búsqueda de la lista, configuración…): pegado normal.
+        - En el cuadro de enlace con algo ya escrito: pegado normal (se está editando).
+        - Si lo copiado es texto (no un enlace): se pone en el cuadro para buscarlo con Enter."""
+        if not en_entrada and self._foco_en_texto():
+            return None
+        if en_entrada and self.var_url.get().strip():
+            return None
+        try:
+            texto = self.clipboard_get().strip()
+        except tk.TclError:
+            return None
+        enlaces = extraer_enlaces(texto) or ([texto] if re.match(r"^https?://\S+$", texto) else [])
+        if enlaces:
+            for url in enlaces:
+                self._encolar(url)
+            self._ultimo_ofrecido = texto
+            self.aviso_pp.ocultar()
+            return "break"
+        if en_entrada or not texto:
+            return None
+        self.var_url.set(texto[:300])
+        self.entrada.focus_set()
+        self.entrada._entry.icursor("end")
+        return "break"
+
+    def _atajo_suprimir(self, _evento=None):
+        """Supr: quita de la lista las marcadas o, si no hay, la seleccionada."""
+        if self._foco_en_texto():
+            return None
+        objetivo = self._marcadas() or ([self.sel] if self.sel in self.filas else [])
+        if objetivo:
+            self._quitar_filas(objetivo)
+        return "break"
+
+    def _atajo_buscar(self, _evento=None):
+        self.busq.focus_set()
+        self.busq._entry.select_range(0, "end")
+        return "break"
+
     # ---------------------------------------------------------------- cierre
+    def _al_cerrar_ventana(self):
+        """Botón X. Con "Seguir en segundo plano" (activado por defecto), AUDYAX no se cierra:
+        se esconde junto al reloj y sigue descargando. Para salir del todo: icono → Salir.
+        Sin esa opción (o sin bandeja en el sistema) se cierra, preguntando si hay descargas."""
+        if self.cfg.get("segundo_plano", True) and bandeja_disponible() and self._a_bandeja():
+            if not self._avisado_segundo_plano:
+                self._avisado_segundo_plano = True  # se explica solo la primera vez
+                titulo = "AUDYAX sigue en segundo plano"
+                mensaje = "Está junto al reloj. Para salir del todo: clic derecho en su icono → Salir."
+                if self.cfg.get("notificaciones", True) and not self.bandeja.notificar(titulo, mensaje):
+                    notificar(titulo, mensaje, str(ruta_recurso("audyax.ico")))
+            return
+        if self.pendientes > 0 and not messagebox.askyesno(
+                "Descargas en curso", "Hay descargas en curso. ¿Cancelarlas y cerrar AUDYAX?"):
+            return
+        self._cerrar()
+
     def _cerrar(self):
         guardar_config(self._cfg_actual())
         self._cancelar()
+        self.bandeja.ocultar()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
 
+def autoprueba(app: "App", salida: str):
+    """--prueba-arranque: comprueba que el programa (sobre todo el .exe) trae todo lo que
+    necesita y que FFmpeg funciona, escribe el resultado en JSON y se cierra.
+    La usa GitHub Actions para probar el .exe en Windows."""
+    import tempfile
+
+    from motor_descarga import HAY_YTMUSIC, analizar_volumen
+    r = {"version": VERSION, "ytdlp": version_ytdlp(), "ejecutable": bool(getattr(sys, "frozen", False)),
+         "ffmpeg": shutil.which("ffmpeg"), "ffprobe": shutil.which("ffprobe"),
+         "mutagen": HAY_MUTAGEN, "ytmusicapi": HAY_YTMUSIC, "arrastrar_soltar": app.hay_dnd,
+         "bandeja": bandeja_disponible(), "motivo_sin_bandeja": motivo_sin_bandeja(),
+         "notificaciones": notificaciones_disponibles(), "icono": ruta_recurso("audyax.ico").exists()}
+    try:  # FFmpeg de verdad: genera un tono y mide su volumen
+        with tempfile.TemporaryDirectory() as tmp:
+            tono = Path(tmp) / "tono.mp3"
+            subprocess.run([r["ffmpeg"] or "ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "sine=duration=1", "-c:a", "libmp3lame", str(tono)], check=True, timeout=60,
+                           **({"creationflags": subprocess.CREATE_NO_WINDOW}
+                              if sys.platform.startswith("win") else {}))
+            r["ffmpeg_funciona"] = analizar_volumen(tono) is not None
+    except Exception as e:
+        r["ffmpeg_funciona"] = False
+        r["ffmpeg_error"] = str(e)
+    try:
+        r["bandeja_se_muestra"] = app.bandeja.mostrar("AUDYAX (prueba)")
+        app.bandeja.ocultar()
+    except Exception as e:
+        r["bandeja_se_muestra"] = False
+        r["bandeja_error"] = str(e)
+    Path(salida).write_text(json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8")
+    app.destroy()
+
+
 def main():
-    App().mainloop()
+    preparar_ffmpeg_incluido()  # el .exe trae su propio FFmpeg
+    if "--prueba-arranque" in sys.argv:
+        i = sys.argv.index("--prueba-arranque")
+        salida = sys.argv[i + 1] if len(sys.argv) > i + 1 else "prueba-arranque.json"
+        app = App()
+        app.after(1500, lambda: autoprueba(app, salida))
+        app.mainloop()
+    else:
+        App().mainloop()
+    # Al cerrar la ventana, terminar del todo: alguna librería (p. ej. la de la bandeja) puede
+    # dejar un hilo vivo que mantendría el proceso abierto sin ventana.
+    logging.shutdown()
+    os._exit(0)
 
 
 if __name__ == "__main__":

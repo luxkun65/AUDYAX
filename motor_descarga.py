@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -63,6 +64,8 @@ except ImportError:  # yt-dlp muy antiguo: actualiza con pip install -U yt-dlp
         pass
 
 
+VERSION = "1.0.0"
+REPO = "luxkun65/AUDYAX"
 CONFIG_PATH = Path.home() / ".descargador_musica.json"
 DIR_POR_DEFECTO = str(Path.home() / "Music" / "Descargas")
 CONFIG_POR_DEFECTO = {
@@ -78,7 +81,19 @@ CONFIG_POR_DEFECTO = {
     "organizar": "plano",            # "plano" | "artista" | "artista_album" (ver MODOS_ORGANIZAR)
     "playlists_en_carpeta": True,    # las playlists van juntas en su carpeta aunque se organice
     "descargas_simultaneas": 2,      # canciones que se bajan a la vez (1 = una tras otra)
+    "notificaciones": True,          # avisar cuando terminan las descargas
+    "segundo_plano": True,           # al cerrar con la X, seguir abierto en la bandeja del sistema
+    # Opciones avanzadas (todas apagadas al principio)
+    "limite_velocidad_activo": False,
+    "limite_velocidad_mb": 2.0,      # MB/s en total (se reparte entre las descargas simultáneas)
+    "proxy_activo": False,
+    "proxy": "",                     # p. ej. http://servidor:8080 o socks5://127.0.0.1:1080
+    "cookies_activo": False,
+    "cookies_origen": "firefox",     # firefox, chrome, edge… o "archivo"
+    "cookies_archivo": "",           # ruta a un cookies.txt (formato Netscape)
 }
+NAVEGADORES_COOKIES = ["firefox", "chrome", "edge", "brave", "opera", "vivaldi", "chromium"]
+PROXY_VALIDO = re.compile(r"^(https?|socks4a?|socks5h?)://[^\s/]+(:\d+)?/?$", re.IGNORECASE)
 MAX_SIMULTANEAS = 3  # más que esto hace que YouTube empiece a frenar o bloquear
 
 # Escrituras compartidas entre hilos (faltantes.txt, log)
@@ -95,6 +110,72 @@ MODOS_ORGANIZAR = {
 # ==============================================================================
 # MOTOR DE DESCARGA (sin nada de interfaz; se comunica enviando eventos)
 # ==============================================================================
+# Mensajes con los que YouTube pide confirmar la edad (solo en estos casos se usan las cookies)
+ES_RESTRICCION_EDAD = re.compile(
+    r"confirm your age|age[- ]?restricted|inappropriate for some users|age verification|"
+    r"confirmar tu edad|restricci[oó]n de edad", re.IGNORECASE)
+
+
+def opciones_red(cfg: dict) -> dict:
+    """Límite de velocidad y proxy según la configuración (vacío si están apagados).
+    Se usan en TODAS las consultas: descargas, búsqueda y lectura de playlists.
+    Las cookies NO van aquí: solo se usan para videos con restricción de edad
+    (ver opciones_cookies y ejecutar_trabajo)."""
+    op = {}
+    if cfg.get("limite_velocidad_activo"):
+        try:
+            mb = float(str(cfg.get("limite_velocidad_mb", 0)).replace(",", "."))
+        except ValueError:
+            mb = 0
+        if mb > 0:
+            # El límite es para el total: se reparte entre las descargas simultáneas
+            op["ratelimit"] = max(32 * 1024, int(mb * 1024 * 1024 / descargas_simultaneas(cfg)))
+    proxy = (cfg.get("proxy") or "").strip()
+    if cfg.get("proxy_activo") and PROXY_VALIDO.match(proxy):
+        op["proxy"] = proxy
+    return op
+
+
+def opciones_cookies(cfg: dict) -> dict:
+    """Cookies de la sesión de YouTube (vacío si la opción está apagada o mal configurada)."""
+    if not cfg.get("cookies_activo"):
+        return {}
+    origen = cfg.get("cookies_origen") or "firefox"
+    if origen == "archivo":
+        if cfg.get("cookies_archivo") and Path(cfg["cookies_archivo"]).is_file():
+            return {"cookiefile": cfg["cookies_archivo"]}
+        return {}
+    if origen in NAVEGADORES_COOKIES:
+        return {"cookiesfrombrowser": (origen,)}
+    return {}
+
+
+class _CookiesSoloLectura:
+    """yt-dlp vuelve a ESCRIBIR el archivo de cookies al terminar. Para no tocar el
+    cookies.txt del usuario (ni que varias descargas a la vez lo escriban juntas), cada
+    descarga trabaja con una copia temporal que se borra al final."""
+
+    def __init__(self, opciones: dict):
+        self.opciones, self.copia = opciones, None
+
+    def __enter__(self):
+        original = self.opciones.get("cookiefile")
+        if original:
+            fd, self.copia = tempfile.mkstemp(prefix="audyax_cookies_", suffix=".txt")
+            os.close(fd)
+            shutil.copyfile(original, self.copia)
+            self.opciones["cookiefile"] = self.copia
+        return self.opciones
+
+    def __exit__(self, *exc):
+        if self.copia:
+            try:
+                os.remove(self.copia)
+            except OSError:
+                pass
+        return False
+
+
 def descargas_simultaneas(cfg: dict) -> int:
     try:
         n = int(cfg.get("descargas_simultaneas", 1))
@@ -522,7 +603,7 @@ def _miniatura_mayor(miniaturas) -> str:
     return max(miniaturas, key=lambda t: (t.get("width") or 0))["url"]
 
 
-def pistas_ytmusic(url: str, cliente=None):
+def pistas_ytmusic(url: str, cliente=None, proxy: str = ""):
     """Lee una playlist o álbum de music.youtube.com como lo hace YouTube Music.
 
     Por qué: yt-dlp no soporta YouTube Music y redirige a la misma playlist en youtube.com,
@@ -535,7 +616,7 @@ def pistas_ytmusic(url: str, cliente=None):
     if cliente is None:
         if not HAY_YTMUSIC:
             return None
-        cliente = YTMusic()
+        cliente = YTMusic(proxies={"http": proxy, "https": proxy} if proxy else None)
     partes = urllib.parse.urlsplit(url)
     album_fijo = ""
     if partes.path.startswith("/browse/MPRE"):
@@ -564,7 +645,7 @@ def pistas_ytmusic(url: str, cliente=None):
     return titulo, pistas
 
 
-def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
+def analizar_url(url: str, carpeta: Path, subcarpeta: str = "", red=None):
     """Devuelve (carpeta_destino, lista_de_canciones, es_playlist, titulo_playlist).
     Si es playlist, usa subcarpeta. 'subcarpeta' fuerza el destino (se usa al reintentar
     una canción que venía de una playlist)."""
@@ -572,8 +653,8 @@ def analizar_url(url: str, carpeta: Path, subcarpeta: str = ""):
     titulo = ""
     try:
         opciones = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
-                    "ignoreerrors": True, "logger": _Silencio()}
-        with YoutubeDL(opciones) as ydl:
+                    "ignoreerrors": True, "logger": _Silencio(), **(red or {})}
+        with _CookiesSoloLectura(opciones) as opciones, YoutubeDL(opciones) as ydl:
             info = ydl.extract_info(url, download=False)
         if info and info.get("_type") == "playlist":
             es_playlist = True
@@ -677,6 +758,7 @@ def construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
         "logger": logger,
         "progress_hooks": [hook_progreso],
         "postprocessor_hooks": [hook_pp],
+        **opciones_red(cfg),
     }
 
 
@@ -696,13 +778,13 @@ def agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
     ydl.add_post_processor(MarcarListo(ydl, emitir, cfg["replaygain"], registro), when="after_move")
 
 
-def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None) -> dict:
+def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None, red=None) -> dict:
     """Decide qué se va a bajar. Devuelve destino, entradas, es_playlist, las URLs que se
     le pasan a yt-dlp y, si vino de YouTube Music, sus títulos/artistas/álbumes por id."""
     url = limpiar_url(url)
     if es_playlist_ytmusic(url):
         try:
-            res = pistas_ytmusic(url)
+            res = pistas_ytmusic(url, proxy=(red or {}).get("proxy", ""))
         except Exception as e:  # sin conexión, playlist privada, cambio de la API…
             res = None
             if log:
@@ -719,7 +801,7 @@ def resolver(url: str, carpeta: Path, subcarpeta: str = "", log=None) -> dict:
                 "extras": {p["id"]: {k: p[k] for k in ("titulo", "artista", "album")} for p in pistas},
                 "album_defecto": titulo, "por_cancion": True,
             }
-    destino, entradas, es_playlist, titulo = analizar_url(url, carpeta, subcarpeta)
+    destino, entradas, es_playlist, titulo = analizar_url(url, carpeta, subcarpeta, red)
     if es_playlist and entradas:
         # Una URL por canción: así se pueden bajar varias a la vez
         return {"destino": destino, "entradas": entradas, "es_playlist": True,
@@ -747,7 +829,21 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
     log = configurar_log(carpeta)
     conocidas = {}  # id -> entrada (para que faltantes.txt diga QUÉ canción falló)
 
+    cookies = opciones_cookies(cfg)
+    por_edad = []          # canciones con restricción de edad que se reintentarán con cookies
+    reintentadas = set()   # (las que ya se reintentaron: si vuelven a fallar, es un error normal)
+
     def al_fallar(id_video, motivo):
+        if ES_RESTRICCION_EDAD.search(motivo) and id_video != "?":
+            if cookies and id_video not in reintentadas:
+                # No es un error todavía: se vuelve a intentar con la sesión del usuario
+                if id_video not in por_edad:
+                    por_edad.append(id_video)
+                emitir(("estado", id_video, "Restricción de edad: usando tu sesión…"))
+                return
+            if not cookies:
+                motivo += (" (Video con restricción de edad: actívalo en Configuración → "
+                           "Avanzado → Cookies)")
         e = conocidas.get(id_video) or {}
         if e.get("disponible") is False:
             motivo += (" (YouTube Music la muestra en gris: no está disponible en tu país "
@@ -767,7 +863,8 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
     logger = RegistroYtdlp(log, al_fallar)
 
     # 1) Mostrar de inmediato todas las canciones (amarillas, "en cola")
-    plan = resolver(url, carpeta, cfg.get("subcarpeta") or "", log)
+    red = opciones_red(cfg)
+    plan = resolver(url, carpeta, cfg.get("subcarpeta") or "", log, red)
     if cfg.get("extras"):  # p. ej. al reintentar una canción que venía de YouTube Music
         plan["extras"] = {**cfg["extras"], **plan["extras"]}
     destino, entradas, es_playlist = plan["destino"], plan["entradas"], plan["es_playlist"]
@@ -819,25 +916,28 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
     registro = []
     reservas = ReservaNombres()
 
-    def bajar(lote, id_video):
+    def bajar(lote, id_video, con_cookies=False):
         """Baja una canción (o la URL entera si no se pudo separar). Cada hilo usa su propio
-        YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app."""
+        YoutubeDL, y el semáforo 'limite' asegura que no haya más de N a la vez en toda la app.
+        con_cookies: solo en el reintento de un video con restricción de edad."""
         if id_video in omitir:
             return  # cancelada antes de empezar: ni siquiera ocupa un cupo
         with limite:
             esperar_si_pausa(pausa, cancelar, id_video, omitir)
             opciones = construir_opciones(cfg, carpeta, destino, logger, hook_progreso, hook_pp,
                                           organizar)
-            with YoutubeDL(opciones) as ydl:
+            if con_cookies:
+                opciones.update(cookies)
+            with _CookiesSoloLectura(opciones) as opciones, YoutubeDL(opciones) as ydl:
                 agregar_postprocesadores(ydl, cfg, destino, emitir, cancelar, registro,
                                          plan["extras"], plan["album_defecto"], organizar,
                                          reservas, pausa, omitir)
                 ydl.download(lote)
 
-    def bajar_seguro(par):
+    def bajar_seguro(par, con_cookies=False):
         lote, id_video = par
         try:
-            bajar(lote, id_video)
+            bajar(lote, id_video, con_cookies)
         except DownloadCancelled:
             pass
         except Exception as e:  # un fallo inesperado no debe tumbar las demás canciones
@@ -853,6 +953,15 @@ def ejecutar_trabajo(url: str, cfg: dict, emitir, cancelar, pausa=None, limite=N
                 if cancelar.is_set():
                     break
                 bajar_seguro(par)
+
+    # 2b) Videos con restricción de edad: segundo intento, ahora sí con las cookies
+    url_de = {e["id"]: u for u, e in zip(plan["urls"], entradas)} if plan.get("por_cancion") else {}
+    for id_video in list(por_edad):
+        if cancelar.is_set():
+            break
+        reintentadas.add(id_video)
+        bajar_seguro(([url_de.get(id_video) or f"https://www.youtube.com/watch?v={id_video}"], id_video),
+                     con_cookies=True)
     if cancelar.is_set():
         raise DownloadCancelled("Cancelado por el usuario")
 
@@ -915,15 +1024,15 @@ def _resultado(e: dict) -> dict:
     return datos
 
 
-def buscar(texto: str, cantidad: int = 10) -> list:
+def buscar(texto: str, cantidad: int = 10, red=None) -> list:
     """Busca en YouTube y devuelve una lista de resultados
     (id, titulo, url, miniatura, canal, duracion). Lanza la excepción si falla."""
     texto = (texto or "").strip()
     if not texto:
         return []
     opciones = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
-                "logger": _Silencio()}
-    with YoutubeDL(opciones) as ydl:
+                "logger": _Silencio(), **(red or {})}
+    with _CookiesSoloLectura(opciones) as opciones, YoutubeDL(opciones) as ydl:
         info = ydl.extract_info(f"ytsearch{int(cantidad)}:{texto}", download=False)
     return [_resultado(e) for e in (info or {}).get("entries") or []
             if e and e.get("id") and e.get("ie_key") in (None, "Youtube")]
@@ -951,6 +1060,37 @@ def ultima_version_ytdlp(timeout: int = 8) -> str:
                                  headers={"User-Agent": "AUDYAX"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))["info"]["version"]
+
+
+def ultima_version_app(timeout: int = 8) -> str:
+    """Última versión publicada de AUDYAX en GitHub Releases (p. ej. "1.0.1").
+    Lanza la excepción si no hay conexión o aún no hay versiones publicadas."""
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                 headers={"User-Agent": "AUDYAX", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))["tag_name"].lstrip("vV")
+
+
+def carpeta_programa() -> Path:
+    """Carpeta donde está AUDYAX: la del .exe si está empaquetado, o la de este archivo."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def preparar_ffmpeg_incluido() -> str:
+    """Si junto al programa hay una carpeta 'ffmpeg' (la versión .exe la trae), se pone
+    primera en el PATH para que la usen yt-dlp y el cálculo de ReplayGain.
+    Devuelve la carpeta usada o "" si no hay ninguna."""
+    candidatas = [carpeta_programa() / "ffmpeg"]
+    if getattr(sys, "_MEIPASS", None):
+        candidatas.append(Path(sys._MEIPASS) / "ffmpeg")
+    for carpeta in candidatas:
+        exe = "ffmpeg.exe" if sys.platform.startswith("win") else "ffmpeg"
+        if (carpeta / exe).is_file():
+            os.environ["PATH"] = str(carpeta) + os.pathsep + os.environ.get("PATH", "")
+            return str(carpeta)
+    return ""
 
 
 def puede_actualizarse() -> bool:

@@ -84,7 +84,7 @@ def servidor(tmp_path_factory, monkeypatch):
 
 
 def _descargar(monkeypatch, url, carpeta, es_playlist, **cfg_extra):
-    def plan_falso(_url, carpeta_base, sub="", log=None):
+    def plan_falso(_url, carpeta_base, sub="", log=None, red=None):
         datos = {"titulo": "One More Time", "artista": "Daft Punk", "album": "Discovery"}
         return {"destino": carpeta_base / (sub or "Mi Playlist") if es_playlist else carpeta_base,
                 "entradas": [dict(datos, id="cancion", url=url, miniatura="")],

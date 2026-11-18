@@ -26,9 +26,20 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - **yt-dlp updates**: YouTube changes often and old yt-dlp versions stop working. AUDYAX checks for a new version on startup (can be turned off in *Configuración*) and updates it with one click; restart the app afterwards.
 - Already-downloaded songs are skipped (`descargados.txt`); failures are logged in `faltantes.txt` and `descarga.log`.
 - **Optional folder organization** (*Configuración → Organizar descargas*, off by default): keep everything in one folder, or sort songs into `Artist/` or `Artist/Album/` subfolders using their tags. Playlists can still go together in their own folder.
-- Light and dark themes; settings are saved in `~/.descargador_musica.json`.
+- **Notifications**: a system notification when all downloads finish (only if AUDYAX is not in front). Can be turned off.
+- **Keep running in the background**: closing the window (X) keeps AUDYAX running next to the clock in the system tray, still downloading (click the icon to bring it back; right-click for *Pause* / *Exit* to quit for real). Minimizing works as usual. On by default; can be turned off in *Configuración → General*, and then X closes the program (asking first if downloads are in progress).
+- **Keyboard shortcuts**: `Ctrl+V` pastes a copied link and starts downloading it, `Supr`/`Delete` removes the selected (or checked) rows from the list (files are not deleted), `Ctrl+F` searches the list.
+- **Advanced options** (*Configuración → Avanzado*, all off by default):
+  - **Speed limit** in MB/s (total, shared among parallel downloads).
+  - **Proxy** (`http://`, `https://`, `socks5://`…), used for downloads, searches and YouTube Music playlists.
+  - **Cookies** from your browser session (Firefox recommended) or a `cookies.txt` file, **used only for age-restricted videos**: every song is first tried without them, and only if YouTube asks to confirm the age is that song retried with your session. On Windows, Chrome/Edge and other Chromium browsers no longer let other programs read their cookies, so use Firefox or a `cookies.txt` export. Using your account with download tools may get it rate-limited by YouTube; a secondary account is safer.
+- Light and dark themes; settings are saved in `~/.descargador_musica.json` (tabs *General*, *Descargas*, *Avanzado*).
 
-## Requirements
+## Download (Windows, no Python needed)
+
+Get the latest `AUDYAX-x.y.z-windows.zip` from [Releases](https://github.com/luxkun65/AUDYAX/releases), unzip it anywhere and run `AUDYAX.exe`. FFmpeg is included. When a new version is published, AUDYAX shows a notice on startup.
+
+## Requirements (running from source)
 
 - Python **3.11+**
 - [FFmpeg](https://ffmpeg.org/download.html) installed and available in the `PATH`
@@ -56,14 +67,26 @@ Paste a YouTube or YouTube Music link (song or playlist), choose the destination
 
 > **Note on M4A:** YouTube already serves AAC audio, so M4A is saved as-is, without re-encoding (no quality loss). The quality selector only applies to M4A when normalization is enabled, because then the audio has to be re-encoded.
 
-## Building an executable
+## Building the executable
 
 ```bash
 pip install -r requirements-dev.txt
-python build.py
+python tools/descargar_ffmpeg.py   # Windows: downloads FFmpeg (LGPL build) to vendor/ffmpeg
+python build.py --zip
 ```
 
-The executable is created in `dist/` (`AUDYAX.exe` on Windows). Build it on the same operating system you will run it on. FFmpeg is not bundled: it must be installed on the target machine.
+The program is created in `dist/AUDYAX/` (`AUDYAX.exe` + `_internal/` + `ffmpeg/`) and zipped as `dist/AUDYAX-<version>-windows.zip`. It is a folder rather than a single `.exe` because FFmpeg is over 100 MB: inside a single file it would have to be unpacked on every start. Build it on the same operating system you will run it on.
+
+`AUDYAX.exe --prueba-arranque resultado.json` starts the program, checks that everything is bundled and that FFmpeg works, writes the result and exits (used by CI).
+
+### Publishing a version
+
+GitHub Actions (`.github/workflows/windows.yml`) runs the tests on Windows, builds the program and self-tests it on every pull request (the zip is downloadable from the run's *Artifacts*). To publish a release:
+
+1. Update `VERSION` in `motor_descarga.py` (e.g. `1.0.1`) and merge it into `main`.
+2. `git tag v1.0.1 && git push origin v1.0.1`
+
+The workflow then attaches the zip to a new GitHub Release.
 
 ## Tests
 
@@ -80,7 +103,10 @@ The tests don't need internet. The ones that generate audio need FFmpeg and are 
 |---|---|
 | `motor_descarga.py` | Download engine: yt-dlp options, post-processing, tags, ReplayGain, settings. No GUI code; it communicates through events, so it can be used from any interface. |
 | `descargador_gui.py` | Graphical interface (customtkinter + Pillow). |
-| `build.py` | Builds the executable with PyInstaller. |
+| `escritorio.py` | System tray icon and notifications (optional: AUDYAX works without them). |
+| `build.py` | Builds the program with PyInstaller (with FFmpeg and the icon). |
+| `tools/` | Download FFmpeg for the build, generate the icon, check the self-test. |
+| `assets/` | Application icon. |
 | `tests/` | Automated tests (pytest). |
 
 ## Disclaimer
