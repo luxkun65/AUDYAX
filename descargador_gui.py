@@ -591,6 +591,56 @@ class VentanaResultados(ctk.CTkToplevel):
 
 
 # ==============================================================================
+# EXPORTAR
+# ==============================================================================
+class VentanaExportar(ctk.CTkToplevel):
+    """Elegir qué exportar: lista de reproducción .m3u o tabla .csv."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Exportar")
+        self.geometry("460x330")
+        self.resizable(False, False)
+        self.transient(app)
+        self.configure(fg_color=C["bg"])
+        vista = app._filas_en_vista()
+        descargadas = sum(1 for v in vista if app.filas[v]["color"] == "verde" and app.filas[v]["ruta"]
+                          and Path(app.filas[v]["ruta"]).exists())
+        filtrada = len(vista) != len(app.filas)
+
+        ctk.CTkLabel(self, text="  Exportar", image=icono("export", 18), compound="left",
+                     font=app.f_det, anchor="w").pack(fill="x", padx=18, pady=(14, 2))
+        ctk.CTkLabel(self, text="Se exporta lo que se ve en la lista" + (" (con el filtro actual)." if filtrada
+                                                                          else "."),
+                     font=app.f_peq, text_color=C["suave"], anchor="w").pack(fill="x", padx=18, pady=(0, 10))
+        self.btn_m3u = self._opcion(
+            "Lista de reproducción (.m3u)",
+            f"{descargadas} {'canción descargada' if descargadas == 1 else 'canciones descargadas'} · "
+            "para abrir en VLC, foobar2000, Winamp…", app._exportar_m3u, descargadas > 0)
+        self.btn_csv = self._opcion(
+            "Tabla (.csv)", f"{len(vista)} {'fila' if len(vista) == 1 else 'filas'} · "
+            "título, artista, álbum, estado… para Excel", app._exportar_csv, len(vista) > 0)
+        app._boton(self, "Cerrar", self.destroy, width=100, height=34).pack(anchor="e", padx=18, pady=(4, 12))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.after(150, self.focus)
+
+    def _opcion(self, titulo, detalle, accion, activo):
+        marco = self.app._tarjeta(self)
+        marco.pack(fill="x", padx=18, pady=5)
+
+        def elegir():
+            self.destroy()       # primero se cierra esta ventana; luego sale "Guardar como"
+            self.app.after(50, accion)
+        boton = self.app._boton(marco, titulo, elegir, icono("export", 16, C["sobre_acento"]),
+                                acento=True, height=36, width=300, state="normal" if activo else "disabled")
+        boton.pack(anchor="w", padx=12, pady=(10, 2))
+        ctk.CTkLabel(marco, text=detalle, font=self.app.f_peq, text_color=C["suave"], anchor="w",
+                     justify="left", wraplength=400).pack(fill="x", padx=14, pady=(0, 10))
+        return boton
+
+
+# ==============================================================================
 # EDITOR DE ETIQUETAS
 # ==============================================================================
 class VentanaEtiquetas(ctk.CTkToplevel):
@@ -785,6 +835,7 @@ class App(ctk.CTk, *_BASES_DND):
         self._visibles = set()        # ids que pasan el filtro actual
         self._vista_programada = False
         self.ventana_resultados = None
+        self.ventana_exportar = None
         self.lote = {"ok": 0, "err": 0, "omit": 0}  # resultado de la tanda actual (notificación)
         self._avisado_segundo_plano = False
         self.bandeja = Bandeja(self._imagen_bandeja(),
@@ -1922,21 +1973,13 @@ class App(ctk.CTk, *_BASES_DND):
 
     # ---------------------------------------------------------------- exportar
     def _menu_exportar(self):
-        menu = self._nuevo_menu()
-        menu.add_command(label="Lista de reproducción (.m3u) de las descargadas", command=self._exportar_m3u)
-        menu.add_command(label="Tabla (.csv) de la lista", command=self._exportar_csv)
-        b = self.btn_exportar
-        self._mostrar_menu(menu, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height() + 3)
-
-    @staticmethod
-    def _mostrar_menu(menu: tk.Menu, x: int, y: int):
-        """Abre un menú en (x, y). En Windows y macOS se usa post(): con tk_popup(), un menú
-        abierto desde un botón (y no desde el clic derecho) no llega a aparecer en Windows.
-        Es lo mismo que hace customtkinter con sus listas desplegables."""
-        if sys.platform.startswith("win") or sys.platform == "darwin":
-            menu.post(int(x), int(y))
-        else:
-            menu.tk_popup(int(x), int(y))
+        """Botón Exportar: ventanita con las dos opciones. (Antes era un menú emergente de
+        Windows, que en algunos equipos no llegaba a aparecer.)"""
+        if self.ventana_exportar is not None and self.ventana_exportar.winfo_exists():
+            self.ventana_exportar.lift()
+            self.ventana_exportar.focus()
+            return
+        self.ventana_exportar = VentanaExportar(self)
 
     def _exportar_m3u(self):
         canciones = [self.filas[v] for v in self._filas_en_vista()

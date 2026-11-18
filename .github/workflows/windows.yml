@@ -33,12 +33,11 @@ jobs:
           $env:PATH = "$PWD\vendor\ffmpeg;$env:PATH"
           python -m pytest -q
 
-      - name: Prueba de interfaz con clics reales (menú Exportar)
+      - name: Prueba de interfaz con clics reales (Exportar)
         run: |
           pip install pyautogui
           $env:PATH = "$PWD\vendor\ffmpeg;$env:PATH"
-          python tools/prueba_menu_windows.py "$PWD\menu-antes.json" --antes
-          python tools/prueba_menu_windows.py "$PWD\menu-despues.json"
+          python tools/prueba_menu_windows.py "$PWD\menu-exportar.json"
 
       - name: Guardar capturas de la prueba de interfaz
         if: always()

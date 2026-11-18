@@ -1,13 +1,11 @@
 """
-Prueba de interfaz en Windows (la corre GitHub Actions): abre AUDYAX, hace clic DE VERDAD
-con el mouse en "Exportar" y luego en la primera opción del menú, y comprueba que se exportó.
+Prueba de interfaz en Windows (la corre GitHub Actions): abre AUDYAX y, con clics DE VERDAD
+del mouse, pulsa "Exportar" y luego "Lista de reproducción (.m3u)"; comprueba que se exportó.
 
-Existe porque el menú de Exportar no aparecía en Windows (tk_popup) aunque en Linux sí:
-este tipo de fallo solo se ve en Windows y con clics reales.
+Existe porque el menú emergente de Exportar no aparecía en algunos Windows: este tipo de
+fallo solo se ve en Windows y con clics reales.
 
-    python tools/prueba_menu_windows.py resultado.json [--antes]
-
---antes: usa la forma vieja de abrir el menú (para comprobar que la prueba sí detecta el fallo).
+    python tools/prueba_menu_windows.py resultado.json
 """
 import json
 import subprocess
@@ -34,19 +32,10 @@ subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=durat
                 "-c:a", "libmp3lame", str(cancion)], check=True)
 lista = carpeta / "lista.m3u"
 
-resultado = {"variante": "antes" if "--antes" in sys.argv else "despues", "mensajes": []}
+resultado = {"mensajes": []}
 g.filedialog.asksaveasfilename = lambda **k: str(lista)       # sin el diálogo nativo
 g.messagebox.showinfo = lambda t, msg, **k: resultado["mensajes"].append(msg)
 g.messagebox.showerror = lambda t, msg, **k: resultado["mensajes"].append("ERROR: " + msg)
-
-if "--antes" in sys.argv:
-    def menu_viejo(self):
-        menu = self._nuevo_menu()
-        menu.add_command(label="m3u", command=self._exportar_m3u)
-        menu.add_command(label="csv", command=self._exportar_csv)
-        b = self.btn_exportar
-        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
-    g.App._menu_exportar = menu_viejo
 
 app = g.App()
 app.minsize(800, 500)
@@ -54,29 +43,64 @@ app.geometry("1000x700+0+0")
 app._manejar(("nuevo", "v1", {"titulo": "Uno", "url": "u", "miniatura": "", "subcarpeta": ""}))
 app._manejar(("listo", "v1", {"titulo": "Uno", "artista": "A", "album": "", "anio": "", "genero": "",
                               "url": "u", "ruta": str(cancion)}))
-coords, listo, terminado = {}, threading.Event(), threading.Event()
+pedido = {"centro": None}           # el robot pide dónde hacer clic; la ventana se lo dice
+listo = threading.Event()
+terminado = threading.Event()
+
+
+def centro(widget):
+    widget.update_idletasks()
+    return (widget.winfo_rootx() + widget.winfo_width() // 2,
+            widget.winfo_rooty() + widget.winfo_height() // 2)
 
 
 def preparar():
     app.lift()
     app.focus_force()
     app.update()
-    b = app.btn_exportar
-    coords.update(x=b.winfo_rootx() + b.winfo_width() // 2, y=b.winfo_rooty() + b.winfo_height() // 2,
-                  izq=b.winfo_rootx(), abajo=b.winfo_rooty() + b.winfo_height())
+    pedido["centro"] = centro(app.btn_exportar)
     listo.set()
 
 
+def buscar_dialogo(intentos=[0]):
+    v = app.ventana_exportar
+    if v is not None and v.winfo_exists() and v.winfo_ismapped():
+        resultado["dialogo_abierto"] = True
+        pedido["centro"] = centro(v.btn_m3u)
+        listo.set()
+    elif intentos[0] < 25:
+        intentos[0] += 1
+        app.after(200, buscar_dialogo)
+    else:
+        resultado["dialogo_abierto"] = False
+        terminado.set()
+
+
+def captura():
+    try:
+        pyautogui.screenshot(str(salida.with_suffix(".png")))
+    except Exception:  # en Linux necesita herramientas extra; la captura es solo de ayuda
+        pass
+
+
 def robot():
-    listo.wait(30)
-    time.sleep(1)
-    pyautogui.click(coords["x"], coords["y"])               # clic en "Exportar"
-    time.sleep(1.5)
-    pyautogui.screenshot(str(salida.with_suffix(".menu.png")))
-    pyautogui.click(coords["izq"] + 60, coords["abajo"] + 14)  # primera opción del menú
-    time.sleep(2)
-    pyautogui.screenshot(str(salida.with_suffix(".despues.png")))
-    terminado.set()
+    try:
+        listo.wait(30)
+        time.sleep(1)
+        listo.clear()
+        pyautogui.click(*pedido["centro"])                 # clic en "Exportar"
+        time.sleep(1)
+        app.after(0, buscar_dialogo)
+        if not listo.wait(10):
+            captura()
+            return
+        captura()
+        pyautogui.click(*pedido["centro"])                 # clic en "Lista de reproducción (.m3u)"
+        time.sleep(2)
+    except Exception as e:
+        resultado["error_robot"] = f"{type(e).__name__}: {e}"
+    finally:
+        terminado.set()
 
 
 def esperar_fin():
@@ -93,4 +117,4 @@ app.after(2000, preparar)
 app.after(500, esperar_fin)
 app.mainloop()
 print(json.dumps(resultado, indent=2, ensure_ascii=False))
-sys.exit(0 if resultado.get("exportado") or "--antes" in sys.argv else 1)
+sys.exit(0 if resultado.get("exportado") else 1)
