@@ -17,29 +17,29 @@ from pathlib import Path
 
 URL = ("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
        "ffmpeg-master-latest-win64-lgpl-shared.zip")
-DESTINO = Path(__file__).resolve().parent.parent / "vendor" / "ffmpeg"
+TARGET_DIR = Path(__file__).resolve().parent.parent / "vendor" / "ffmpeg"
 
 
 def main():
     print(f"Descargando {URL} …")
     with urllib.request.urlopen(urllib.request.Request(URL, headers={"User-Agent": "AUDYAX"}),
                                 timeout=300) as r:
-        datos = r.read()
-    print(f"{len(datos) / 1048576:.0f} MB descargados")
-    if DESTINO.exists():
-        shutil.rmtree(DESTINO)
-    DESTINO.mkdir(parents=True)
-    with zipfile.ZipFile(io.BytesIO(datos)) as z:
-        for nombre in z.namelist():
-            ruta = Path(nombre)
+        data = r.read()
+    print(f"{len(data) / 1048576:.0f} MB descargados")
+    if TARGET_DIR.exists():
+        shutil.rmtree(TARGET_DIR)
+    TARGET_DIR.mkdir(parents=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for name in z.namelist():
+            path = Path(name)
             # bin/ffmpeg.exe, bin/ffprobe.exe, bin/*.dll y la licencia
-            if (ruta.parent.name == "bin" and (ruta.stem in ("ffmpeg", "ffprobe") or ruta.suffix == ".dll")) \
-                    or ruta.name.upper().startswith("LICENSE"):
-                (DESTINO / ruta.name).write_bytes(z.read(nombre))
-    archivos = sorted(p.name for p in DESTINO.iterdir())
-    if "ffmpeg.exe" not in archivos:
+            if (path.parent.name == "bin" and (path.stem in ("ffmpeg", "ffprobe") or path.suffix == ".dll")) \
+                    or path.name.upper().startswith("LICENSE"):
+                (TARGET_DIR / path.name).write_bytes(z.read(name))
+    files = sorted(p.name for p in TARGET_DIR.iterdir())
+    if "ffmpeg.exe" not in files:
         sys.exit("No se encontró ffmpeg.exe en el archivo descargado")
-    print(f"FFmpeg listo en {DESTINO} ({len(archivos)} archivos)")
+    print(f"FFmpeg listo en {TARGET_DIR} ({len(files)} archivos)")
 
 
 if __name__ == "__main__":

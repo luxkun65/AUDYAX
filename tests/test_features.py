@@ -1,0 +1,227 @@
+"""Pruebas de búsqueda, actualización de yt-dlp, detección de enlaces y editor de etiquetas."""
+import subprocess
+from io import BytesIO
+from types import SimpleNamespace
+
+import pytest
+
+import engine as m
+from test_engine import make_audio, needs_ffmpeg, needs_mutagen
+
+
+# ------------------------------------------------------------------ enlaces
+@pytest.mark.parametrize("text", [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://music.youtube.com/watch?v=abc&list=xyz",
+    "https://youtube.com/playlist?list=PL123",
+    "https://youtu.be/dQw4w9WgXcQ",
+    "http://m.youtube.com/shorts/abc",
+    "  https://www.youtube.com/watch?v=x  ",
+])
+def test_is_youtube_link(text):
+    assert m.is_youtube_link(text)
+
+
+@pytest.mark.parametrize("text", [
+    "", "daft punk", "https://google.com", "https://www.youtube.com/",
+    "mira esto https://youtu.be/abc", "https://notyoutube.com/watch?v=x", None,
+])
+def test_not_youtube_link(text):
+    assert not m.is_youtube_link(text)
+
+
+def test_extract_links_from_drop():
+    data = ("{https://www.youtube.com/watch?v=aaa} https://youtu.be/bbb\n"
+             "https://google.com https://youtu.be/bbb \"https://music.youtube.com/watch?v=ccc\".")
+    assert m.extract_links(data) == [
+        "https://www.youtube.com/watch?v=aaa", "https://youtu.be/bbb",
+        "https://music.youtube.com/watch?v=ccc"]
+    assert m.extract_links("") == []
+
+
+# ------------------------------------------------------------------ búsqueda
+def test_duration_text():
+    assert m._duration_text(65) == "1:05"
+    assert m._duration_text(3725) == "1:02:05"
+    assert m._duration_text(None) == ""
+
+
+def test_search_builds_results(monkeypatch):
+    request_info = {}
+
+    class FakeYDL:
+        def __init__(self, options):
+            request_info["options"] = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            request_info["url"] = url
+            return {"entries": [
+                {"id": "abc", "title": "One More Time", "channel": "Daft Punk - Topic",
+                 "duration": 320, "url": "https://www.youtube.com/watch?v=abc", "ie_key": "Youtube"},
+                {"id": "song_list", "title": "Un canal", "ie_key": "YoutubeTab"},  # no es una canción
+                None,
+            ]}
+
+    monkeypatch.setattr(m, "YoutubeDL", FakeYDL)
+    res = m.search("daft punk one more time", 5)
+    assert request_info["url"] == "ytsearch5:daft punk one more time"
+    assert request_info["options"]["extract_flat"] == "in_playlist"
+    assert res == [{"id": "abc", "title": "One More Time", "url": "https://www.youtube.com/watch?v=abc",
+                    "thumbnail": "https://i.ytimg.com/vi/abc/mqdefault.jpg",
+                    "canal": "Daft Punk", "duration": "5:20"}]
+
+
+def test_search_empty_text_does_not_query():
+    assert m.search("   ") == []
+
+
+# ------------------------------------------------------------------ yt-dlp
+def test_is_newer():
+    assert m.is_newer("2026.11.10", "2026.10.26")
+    assert m.is_newer("2026.10.26.1", "2026.10.26")
+    assert not m.is_newer("2026.10.26", "2026.10.26")
+    assert not m.is_newer("2025.12.31", "2026.01.01")
+
+
+def test_ytdlp_version():
+    assert m.is_newer(m.ytdlp_version(), "2000.1.1")
+
+
+def test_update_in_executable_does_not_use_pip(monkeypatch):
+    monkeypatch.setattr(m.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: pytest.fail("no debe llamar a pip"))
+    ok, message = m.update_ytdlp()
+    assert not ok and "empaquetada" in message
+
+
+def test_update_calls_pip(monkeypatch):
+    called = {}
+
+    def fake_run(cmd, **kw):
+        called["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    assert m.update_ytdlp() == (True, "yt-dlp se actualizó correctamente.")
+    assert called["cmd"][1:6] == ["-m", "pip", "install", "-U", "yt-dlp"]
+    assert ("ytmusicapi" in called["cmd"]) == m.HAS_YTMUSIC
+
+
+def test_update_reports_pip_error(monkeypatch):
+    monkeypatch.setattr(m.subprocess, "run", lambda cmd, **kw: SimpleNamespace(
+        returncode=1, stdout="", stderr="línea 1\nERROR: sin permisos"))
+    ok, message = m.update_ytdlp()
+    assert not ok and "sin permisos" in message
+
+
+def test_update_without_python(monkeypatch):
+    def fails(*a, **k):
+        raise subprocess.TimeoutExpired("pip", 600)
+    monkeypatch.setattr(m.subprocess, "run", fails)
+    assert m.update_ytdlp()[0] is False
+
+
+# ------------------------------------------------------------------ editor de etiquetas
+def _jpeg(color="red", side_px=64) -> bytes:
+    from PIL import Image
+    output = BytesIO()
+    Image.new("RGB", (side_px, side_px), color).save(output, "JPEG")
+    return output.getvalue()
+
+
+def test_is_editable():
+    assert m.is_editable("a.mp3") == m.HAS_MUTAGEN
+    assert not m.is_editable("a.webm")
+
+
+@needs_ffmpeg
+@needs_mutagen
+@pytest.mark.parametrize("ext", [".mp3", ".m4a", ".opus"])
+def test_write_and_read_tags(tmp_path, ext):
+    pytest.importorskip("PIL")
+    path = make_audio(tmp_path / f"a{ext}", seconds=2)
+    assert m.read_cover(path) is None
+    data = {"title": "Título ñ", "artist": "Artista", "album": "Álbum",
+             "year": "2021", "genre": "Pop"}
+    cover = _jpeg()
+    m.write_tags(path, data, cover)
+    assert m.read_tags(path) == data
+    assert m.read_cover(path) == cover
+
+    # Un campo vacío borra la etiqueta; la portada se conserva si no se pasa otra
+    m.write_tags(path, dict(data, genre="", title="Otro"))
+    assert m.read_tags(path) == dict(data, genre="", title="Otro")
+    assert m.read_cover(path) == cover
+
+    # Reemplazar la portada deja solo la nueva
+    new_item = _jpeg("blue")
+    m.write_tags(path, {}, new_item)
+    assert m.read_cover(path) == new_item
+
+
+@needs_ffmpeg
+@needs_mutagen
+def test_editing_keeps_replaygain(tmp_path):
+    path = make_audio(tmp_path / "a.mp3", seconds=2)
+    vol = m.analyze_loudness(path, 2)
+    m.write_replaygain(path, vol)
+    m.write_tags(path, {"title": "X"}, _jpeg())
+    from mutagen.id3 import ID3
+    assert ID3(path).getall("TXXX:REPLAYGAIN_TRACK_GAIN")
+
+
+def test_non_editable_format(tmp_path):
+    (tmp_path / "a.webm").write_bytes(b"x")
+    with pytest.raises(Exception):
+        m.write_tags(tmp_path / "a.webm", {"title": "x"})
+
+
+# ------------------------------------------------------------------ renombrar el archivo
+@pytest.mark.parametrize("text, expected", [
+    ("Canción nueva", "Canción nueva"),
+    ("  Canción nueva.mp3 ", "Canción nueva"),       # se quita la extensión si la escribe
+    ("Canción nueva.MP3", "Canción nueva"),
+    ("AC/DC: Back?", "AC⧸DC： Back？"),              # caracteres prohibidos en Windows
+    ("Termina en punto.", "Termina en punto"),        # Windows no admite nombres con punto final
+    ("   ", ""),
+])
+def test_valid_filename(text, expected):
+    assert m.valid_filename(text, ".mp3") == expected
+
+
+def test_rename_file(tmp_path):
+    original = tmp_path / "viejo.mp3"
+    original.write_bytes(b"audio")
+    new_item = m.rename_file(original, "Nuevo nombre.mp3")
+    assert new_item == tmp_path / "Nuevo nombre.mp3" and new_item.read_bytes() == b"audio"
+    assert not original.exists()
+    assert m.rename_file(new_item, "Nuevo nombre") == new_item  # mismo nombre: no hace nada
+
+
+def test_rename_does_not_overwrite(tmp_path):
+    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    with pytest.raises(FileExistsError):
+        m.rename_file(a, "b")
+    assert a.read_bytes() == b"A" and b.read_bytes() == b"B"
+
+
+def test_rename_case_only(tmp_path):
+    a = tmp_path / "cancion.mp3"
+    a.write_bytes(b"x")
+    new_item = m.rename_file(a, "Cancion")
+    assert new_item.name == "Cancion.mp3" and [p.name for p in tmp_path.iterdir()] == ["Cancion.mp3"]
+
+
+def test_rename_empty(tmp_path):
+    a = tmp_path / "a.mp3"
+    a.write_bytes(b"x")
+    with pytest.raises(ValueError):
+        m.rename_file(a, "  .mp3 ")
+    assert a.exists()

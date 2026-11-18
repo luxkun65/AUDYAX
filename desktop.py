@@ -17,7 +17,7 @@ _pystray = None          # módulo pystray, una vez cargado
 _pystray_error = None    # por qué no se pudo cargar (texto), o None
 
 
-def _cargar_pystray():
+def _load_pystray():
     global _pystray, _pystray_error
     if _pystray is None and _pystray_error is None:
         try:
@@ -27,8 +27,8 @@ def _cargar_pystray():
             _pystray_error = f"{type(e).__name__}: {e}"
             # En Linux pystray prueba primero GTK/AppIndicator; si no están, se reintenta con X11
             if not sys.platform.startswith(("win", "darwin")) and not os.environ.get("PYSTRAY_BACKEND"):
-                for nombre in [m for m in sys.modules if m == "pystray" or m.startswith("pystray.")]:
-                    del sys.modules[nombre]
+                for name in [m for m in sys.modules if m == "pystray" or m.startswith("pystray.")]:
+                    del sys.modules[name]
                 os.environ["PYSTRAY_BACKEND"] = "xorg"
                 try:
                     import pystray
@@ -38,16 +38,16 @@ def _cargar_pystray():
     return _pystray
 
 
-def bandeja_disponible() -> bool:
-    return _cargar_pystray() is not None
+def tray_available() -> bool:
+    return _load_pystray() is not None
 
 
-def motivo_sin_bandeja() -> str:
-    _cargar_pystray()
+def no_tray_reason() -> str:
+    _load_pystray()
     return _pystray_error or ""
 
 
-def notificaciones_disponibles() -> bool:
+def notifications_available() -> bool:
     try:
         from plyer import notification  # noqa: F401
         return True
@@ -55,121 +55,121 @@ def notificaciones_disponibles() -> bool:
         return False
 
 
-class Bandeja:
+class Tray:
     """Icono de AUDYAX junto al reloj, con menú: Abrir, Pausar/Reanudar y Salir.
 
     Las funciones que se pasan (al_abrir, al_pausar, al_salir) se llaman desde el hilo de
     la bandeja, NO desde el de la ventana: quien las pase debe reenviarlas a la ventana
     (AUDYAX las mete en su cola de eventos)."""
 
-    def __init__(self, imagen, al_abrir, al_pausar, al_salir, esta_en_pausa):
-        self.imagen = imagen
-        self.al_abrir, self.al_pausar, self.al_salir = al_abrir, al_pausar, al_salir
-        self.esta_en_pausa = esta_en_pausa
-        self.icono = None
-        self._candado = threading.Lock()
+    def __init__(self, image, on_open, on_pause, on_quit, is_paused):
+        self.image = image
+        self.on_open, self.on_pause, self.on_quit = on_open, on_pause, on_quit
+        self.is_paused = is_paused
+        self.icon = None
+        self._lock = threading.Lock()
 
     @property
     def visible(self) -> bool:
-        return self.icono is not None
+        return self.icon is not None
 
-    def mostrar(self, texto: str = "AUDYAX") -> bool:
-        pystray = _cargar_pystray()
+    def show(self, text: str = "AUDYAX") -> bool:
+        pystray = _load_pystray()
         if pystray is None:
             return False
-        with self._candado:
-            if self.icono is not None:
+        with self._lock:
+            if self.icon is not None:
                 return True
             menu = pystray.Menu(
-                pystray.MenuItem("Abrir AUDYAX", lambda *a: self.al_abrir(), default=True),
-                pystray.MenuItem(lambda item: "Reanudar descargas" if self.esta_en_pausa()
-                                 else "Pausar descargas", lambda *a: self.al_pausar()),
+                pystray.MenuItem("Abrir AUDYAX", lambda *a: self.on_open(), default=True),
+                pystray.MenuItem(lambda item: "Reanudar descargas" if self.is_paused()
+                                 else "Pausar descargas", lambda *a: self.on_pause()),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Salir", lambda *a: self.al_salir()),
+                pystray.MenuItem("Salir", lambda *a: self.on_quit()),
             )
             try:
-                icono = pystray.Icon("AUDYAX", self.imagen, texto, menu)
+                icon = pystray.Icon("AUDYAX", self.image, text, menu)
                 # Hilo "daemon": si la librería se queda colgada, no impide cerrar AUDYAX
-                threading.Thread(target=icono.run, daemon=True, name="bandeja").start()
+                threading.Thread(target=icon.run, daemon=True, name="tray").start()
             except Exception:
                 return False
             # Solo se da por bueno si el icono aparece de verdad. Si el sistema no tiene bandeja
             # (algunos Linux), NO se debe esconder la ventana: no habría cómo volver a abrirla.
-            limite = time.monotonic() + 3
-            while time.monotonic() < limite and not _anclado(icono):
+            limit = time.monotonic() + 3
+            while time.monotonic() < limit and not _anchored(icon):
                 time.sleep(0.05)
-            if not _anclado(icono):
-                _detener_en_segundo_plano(icono)
+            if not _anchored(icon):
+                _stop_in_background(icon)
                 return False
-            self.icono = icono
+            self.icon = icon
         return True
 
-    def ocultar(self):
-        with self._candado:
-            icono, self.icono = self.icono, None
-        if icono is not None:
-            _detener_en_segundo_plano(icono)
+    def hide(self):
+        with self._lock:
+            icon, self.icon = self.icon, None
+        if icon is not None:
+            _stop_in_background(icon)
 
-    def actualizar_texto(self, texto: str):
-        if self.icono is not None:
+    def update_text(self, text: str):
+        if self.icon is not None:
             try:
-                self.icono.title = texto
-                self.icono.update_menu()
+                self.icon.title = text
+                self.icon.update_menu()
             except Exception:
                 pass
 
-    def notificar(self, titulo: str, mensaje: str) -> bool:
+    def notify(self, title: str, message: str) -> bool:
         """Aviso desde el propio icono (Windows lo muestra como notificación)."""
-        if self.icono is None or not getattr(self.icono, "HAS_NOTIFICATION", False):
+        if self.icon is None or not getattr(self.icon, "HAS_NOTIFICATION", False):
             return False
         try:
-            self.icono.notify(mensaje, titulo)
+            self.icon.notify(message, title)
             return True
         except Exception:
             return False
 
 
-def _anclado(icono) -> bool:
+def _anchored(icon) -> bool:
     """El icono se ve de verdad. En Linux/X11 pystray lo marca 'visible' aunque no haya
     bandeja donde ponerlo (lo deja pendiente); ahí se mira si encontró la bandeja."""
-    if not icono.visible:
+    if not icon.visible:
         return False
-    if hasattr(icono, "_systray_manager"):  # solo existe en el modo X11
-        return bool(icono._systray_manager)
+    if hasattr(icon, "_systray_manager"):  # solo existe en el modo X11
+        return bool(icon._systray_manager)
     return True
 
 
-def _detener_en_segundo_plano(icono):
+def _stop_in_background(icon):
     """icon.stop() puede tardar unos segundos en algunos sistemas: que no congele la ventana."""
-    def detener():
+    def stop():
         try:
-            icono.stop()
+            icon.stop()
         except Exception:
             pass
-    threading.Thread(target=detener, daemon=True).start()
+    threading.Thread(target=stop, daemon=True).start()
 
 
-def notificar(titulo: str, mensaje: str, icono_ico: str = "") -> bool:
+def notify(title: str, message: str, ico_icon: str = "") -> bool:
     """Notificación del sistema (en Windows, el aviso de la esquina inferior derecha).
     Devuelve False si no se pudo mostrar; nunca lanza excepciones."""
     try:
         from plyer import notification
-        kw = {"title": titulo[:63], "message": mensaje[:255], "app_name": "AUDYAX", "timeout": 8}
-        if icono_ico and sys.platform.startswith("win"):
-            kw["app_icon"] = icono_ico
+        kw = {"title": title[:63], "message": message[:255], "app_name": "AUDYAX", "timeout": 8}
+        if ico_icon and sys.platform.startswith("win"):
+            kw["app_icon"] = ico_icon
         notification.notify(**kw)
         return True
     except Exception:
         return False
 
 
-def resumen_lote(descargadas: int, errores: int, omitidas: int = 0) -> str:
+def batch_summary(downloaded: int, errors: int, skipped: int = 0) -> str:
     """Texto de la notificación final, p. ej. '78 canciones descargadas · 2 con error'."""
-    partes = []
-    if descargadas:
-        partes.append(f"{descargadas} {'canción descargada' if descargadas == 1 else 'canciones descargadas'}")
-    if omitidas:
-        partes.append(f"{omitidas} ya estaba{'n' if omitidas != 1 else ''} descargada{'s' if omitidas != 1 else ''}")
-    if errores:
-        partes.append(f"{errores} con error")
-    return " · ".join(partes) or "No se descargó ninguna canción"
+    parts = []
+    if downloaded:
+        parts.append(f"{downloaded} {'canción descargada' if downloaded == 1 else 'canciones descargadas'}")
+    if skipped:
+        parts.append(f"{skipped} ya estaba{'n' if skipped != 1 else ''} descargada{'s' if skipped != 1 else ''}")
+    if errors:
+        parts.append(f"{errors} con error")
+    return " · ".join(parts) or "No se descargó ninguna canción"
