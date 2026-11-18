@@ -343,3 +343,33 @@ def test_download_with_speed_limit(tmp_path, monkeypatch):
         httpd.shutdown()
     assert [e for e in events if e[0] == "done"]
     assert 2 * 1024 * 1024 in views  # 4 MB/s split among 2 downloads
+
+
+def test_windows_notification_carries_the_logo(monkeypatch):
+    """On Windows the notification is sent with the AUDYAX logo (pystray alone sends none)."""
+    import types
+    fake_win32 = types.SimpleNamespace(LoadImage=lambda *a: "HICON-logo", IMAGE_ICON=1, LR_LOADFROMFILE=0x10,
+                                       NIM_MODIFY=1, NIF_INFO=0x10)
+    monkeypatch.setitem(sys.modules, "pystray._util", types.SimpleNamespace(win32=fake_win32))
+    monkeypatch.setitem(sys.modules, "pystray._util.win32", fake_win32)
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    sent = []
+
+    class Icon:
+        HAS_NOTIFICATION = True
+
+        def _message(self, code, flags, **kw):
+            sent.append(kw)
+
+        def notify(self, message, title):
+            sent.append("without logo")
+    t = desktop.Tray(None, lambda: None, lambda: None, lambda: None, lambda: False, logo_ico="audyax.ico")
+    t.icon = Icon()
+    assert t.notify("AUDYAX", "3 canciones descargadas")
+    assert sent[0]["hBalloonIcon"] == "HICON-logo"
+    assert sent[0]["dwInfoFlags"] == desktop.NIIF_USER | desktop.NIIF_LARGE_ICON
+    assert (sent[0]["szInfoTitle"], sent[0]["szInfo"]) == ("AUDYAX", "3 canciones descargadas")
+
+    t2 = desktop.Tray(None, lambda: None, lambda: None, lambda: None, lambda: False)  # no logo: plain notification
+    t2.icon = Icon()
+    assert t2.notify("AUDYAX", "x") and sent[-1] == "without logo"

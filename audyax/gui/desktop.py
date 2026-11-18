@@ -62,8 +62,9 @@ class Tray:
     thread, NOT the window's: whoever passes them must forward them to the window
     (AUDYAX puts them in its event queue)."""
 
-    def __init__(self, image, on_open, on_pause, on_quit, is_paused):
+    def __init__(self, image, on_open, on_pause, on_quit, is_paused, logo_ico: str = ""):
         self.image = image
+        self.logo_ico = logo_ico    # .ico shown big inside Windows notifications
         self.on_open, self.on_pause, self.on_quit = on_open, on_pause, on_quit
         self.is_paused = is_paused
         self.icon = None
@@ -122,11 +123,37 @@ class Tray:
         """Notification from the icon itself (Windows shows it as a notification)."""
         if self.icon is None or not getattr(self.icon, "HAS_NOTIFICATION", False):
             return False
+        if self._notify_with_logo(title, message):
+            return True
         try:
             self.icon.notify(message, title)
             return True
         except Exception:
             return False
+
+
+    def _notify_with_logo(self, title: str, message: str) -> bool:
+        """Windows: the same notification, but with the AUDYAX logo inside it.
+        pystray sends it without an image (Windows then shows no logo); here the
+        notification is sent with the logo (NIIF_USER | NIIF_LARGE_ICON + hBalloonIcon)."""
+        if not (sys.platform.startswith("win") and self.logo_ico and hasattr(self.icon, "_message")):
+            return False
+        try:
+            from pystray._util import win32
+            if getattr(self, "_balloon_icon", None) is None:
+                self._balloon_icon = win32.LoadImage(None, self.logo_ico, win32.IMAGE_ICON, 64, 64,
+                                                     win32.LR_LOADFROMFILE)
+            self.icon._message(win32.NIM_MODIFY, win32.NIF_INFO, szInfo=message[:255],
+                               szInfoTitle=title[:63], dwInfoFlags=NIIF_USER | NIIF_LARGE_ICON,
+                               hBalloonIcon=self._balloon_icon)
+            return True
+        except Exception:  # anything odd: the plain notification is used
+            return False
+
+
+# Shell_NotifyIcon flags: use our own image (hBalloonIcon), at the large size
+NIIF_USER = 0x00000004
+NIIF_LARGE_ICON = 0x00000020
 
 
 def _anchored(icon) -> bool:
