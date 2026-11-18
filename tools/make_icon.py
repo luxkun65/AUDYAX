@@ -1,35 +1,50 @@
-"""Generates assets/audyax.ico (Windows executable) and assets/audyax.png (window and tray)
-from the same music note drawing the UI uses.
+"""Generates assets/audyax.ico (Windows executable) and assets/audyax.png (window, tray and
+sidebar) from the logo emblem in docs/brand/emblem.png (the "A" with the note, on black).
 
     python tools/make_icon.py
 """
-import sys
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-from audyax.gui.style import _draw_icon  # noqa: E402
+EMBLEM = ROOT / "docs" / "brand" / "emblem.png"
+BACKGROUND = np.array([12, 5, 28.0])     # dark purple, like the app's dark theme
+GLOW = np.array([46, 14, 92.0])          # soft purple glow behind the emblem
 
-BACKGROUND, NOTE = "#1a0b3b", "#a78bfa"
+
+def emblem() -> Image.Image:
+    """The emblem with a transparent background (its background is pure black)."""
+    a = np.array(Image.open(EMBLEM).convert("RGB")).astype(float)
+    alpha = np.clip(a.max(axis=2) / 70.0, 0, 1)
+    color = np.clip(a / np.maximum(alpha[..., None], 1e-6), 0, 255)   # "un-blend" the soft edges
+    img = Image.fromarray(np.dstack([color, alpha * 255]).astype(np.uint8), "RGBA")
+    return img.crop(img.getbbox())
 
 
-def icon(side_px: int) -> Image.Image:
-    S = 4
-    n = side_px * S
-    im = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    ImageDraw.Draw(im).rounded_rectangle((0, 0, n - 1, n - 1), radius=int(n * 0.22), fill=BACKGROUND)
-    note = _draw_icon("note", NOTE, int(n * 0.62))
-    im.alpha_composite(note, ((n - note.width) // 2, (n - note.height) // 2 + int(n * 0.02)))
-    return im.resize((side_px, side_px), Image.LANCZOS)
+def icon(side: int = 1024, fill: float = 0.90) -> Image.Image:
+    """Rounded square with the emblem in the middle."""
+    yy, xx = np.mgrid[0:side, 0:side]
+    r = np.hypot(xx - side / 2, yy - side / 2) / (side / 2)
+    background = BACKGROUND + (np.clip(1 - r, 0, 1) ** 2)[..., None] * GLOW
+    img = Image.fromarray(background.astype(np.uint8)).convert("RGBA")
+    mark = emblem()
+    scale = side * fill / mark.width
+    mark = mark.resize((int(mark.width * scale), int(mark.height * scale)), Image.LANCZOS)
+    img.alpha_composite(mark, ((side - mark.width) // 2, (side - mark.height) // 2 + int(side * 0.02)))
+    mask = Image.new("L", (side, side), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, side - 1, side - 1), radius=int(side * 0.2), fill=255)
+    out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    return out
 
 
 def main():
     dest = ROOT / "assets"
     dest.mkdir(exist_ok=True)
-    big = icon(256)
-    big.save(dest / "audyax.png")
+    big = icon()
+    big.resize((256, 256), Image.LANCZOS).save(dest / "audyax.png")
     big.save(dest / "audyax.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     print("Icons generated in", dest)
 
