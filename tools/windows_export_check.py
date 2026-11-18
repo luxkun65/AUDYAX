@@ -46,8 +46,8 @@ app._handle(("new", "v1", {"title": "Uno", "url": "u", "thumbnail": "", "subfold
 app._handle(("done", "v1", {"title": "Uno", "artist": "A", "album": "", "year": "", "genre": "",
                               "url": "u", "path": str(song)}))
 request_info = {"center": None}           # the robot asks where to click; the window tells it
-finished = threading.Event()
-finished = threading.Event()
+ready = threading.Event()      # the window tells the robot where to click
+finished = threading.Event()   # the check is over
 
 
 def center(widget):
@@ -61,7 +61,7 @@ def prepare():
     app.focus_force()
     app.update()
     request_info["center"] = center(app.btn_export)
-    finished.set()
+    ready.set()
 
 
 def find_dialog(attempts=[0]):
@@ -69,7 +69,7 @@ def find_dialog(attempts=[0]):
     if v is not None and v.winfo_exists() and v.winfo_ismapped():
         result["dialog_opened"] = True
         request_info["center"] = center(v.btn_m3u)
-        finished.set()
+        ready.set()
     elif attempts[0] < 25:
         attempts[0] += 1
         app.after(200, find_dialog)
@@ -87,13 +87,13 @@ def capture():
 
 def robot():
     try:
-        finished.wait(30)
+        ready.wait(30)
         time.sleep(1)
-        finished.clear()
+        ready.clear()
         pyautogui.click(*request_info["center"])                 # click on "Exportar"
         time.sleep(1)
         app.after(0, find_dialog)
-        if not finished.wait(10):
+        if not ready.wait(10):
             capture()
             return
         capture()
