@@ -1405,6 +1405,11 @@ class App(ctk.CTk, *_BASES_DND):
         seg_n.pack(anchor="w", padx=12)
         self._nota_cfg(t, "Canciones que se bajan a la vez. Con más, YouTube puede frenar las descargas.")
 
+        self._titulo_cfg(t, "Playlists vigiladas")
+        self._interruptor_cfg(t, "Revisar si tienen canciones nuevas al abrir AUDYAX", "revisar_vigiladas")
+        self._interruptor_cfg(t, "Bajar las canciones nuevas sin preguntar", "bajar_nuevas_auto")
+        self._nota_cfg(t, "Las playlists se agregan desde «Vigiladas» en la barra de la izquierda.")
+
         self._titulo_cfg(t, "Actualizaciones")
         if puede_actualizarse():
             self._nota_cfg(t, f"AUDYAX {VERSION}  ·  yt-dlp {version_ytdlp()}")
@@ -1415,7 +1420,7 @@ class App(ctk.CTk, *_BASES_DND):
                     icono("refresh", 16), height=32).pack(anchor="w", padx=12, pady=(10, 0))
 
     def _pestana_extras(self, t):
-        """Letras, datos de MusicBrainz y playlists vigiladas."""
+        """Letras y datos de MusicBrainz / Cover Art Archive."""
         self._titulo_cfg(t, "Letras", primero=True)
         nombres = {"no": "No", "lrc": "Archivo .lrc", "incrustada": "Dentro del archivo", "ambas": "Ambas"}
         inverso = {v: k for k, v in nombres.items()}
@@ -1441,10 +1446,6 @@ class App(ctk.CTk, *_BASES_DND):
                           "con seguridad en MusicBrainz, se deja como viene. La portada del álbum "
                           "reemplaza la miniatura del video; si no hay, se usa la miniatura.")
 
-        self._titulo_cfg(t, "Playlists vigiladas")
-        self._interruptor_cfg(t, "Revisar si tienen canciones nuevas al abrir AUDYAX", "revisar_vigiladas")
-        self._interruptor_cfg(t, "Bajar las canciones nuevas sin preguntar", "bajar_nuevas_auto")
-        self._nota_cfg(t, "Las playlists se agregan desde «Vigiladas» en la barra de la izquierda.")
 
     def _pestana_avanzado(self, t):
         """Opciones avanzadas. Todas vienen apagadas; solo actúan si se encienden."""
