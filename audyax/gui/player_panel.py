@@ -29,36 +29,79 @@ class PlayerMixin:
     def _player_item(self, vid) -> dict:
         f = self.rows[vid]
         return {"id": vid, "path": f["path"], "title": f["title"], "artist": f["artist"],
-                "image": f["img_pil"], "source": "list"}
+                "album": f["album"], "year": f["year"], "image": f["img_pil"], "source": "list"}
 
-    def _neighbor(self, item, step):
-        """The previous/next downloaded song according to the order the list is shown in."""
-        ids = [v for v in self._rows_in_view() if self._is_playable(self.rows[v])]
-        if not ids:
-            return None
-        i = ids.index(item["id"]) if item["id"] in ids else (-1 if step > 0 else len(ids))
-        j = i + step
-        return self._player_item(ids[j]) if 0 <= j < len(ids) else None
+    def _playable_in_view(self):
+        return [v for v in self._rows_in_view() if self._is_playable(self.rows[v])]
 
     def _play(self, vid):
-        self._play_item(self._player_item(vid))
+        """Plays a downloaded song; the queue becomes the downloaded songs of the list as shown."""
+        ids = self._playable_in_view()
+        if vid not in ids:
+            ids = [vid]
+        self._play_queue([self._player_item(v) for v in ids], ids.index(vid))
+
+    # ---------------------------------------------------------------- queue (shared)
+    def _play_queue(self, items, start: int = 0):
+        """Replaces the queue with `items` and plays items[start]."""
+        item = self.play_queue.set(items, start)
+        if item is not None:
+            self._play_item(item)
+        self._queue_changed()
+
+    def _queue_play_next(self, items):
+        self.play_queue.play_next(items)
+        self._start_if_idle()
+        self._queue_changed()
+
+    def _queue_add(self, items):
+        self.play_queue.add(items)
+        self._start_if_idle()
+        self._queue_changed()
+
+    def _start_if_idle(self):
+        """Adding to an empty player starts it."""
+        if self.player is None or self.player.item is None:
+            item = self.play_queue.next()
+            if item is not None:
+                self._play_item(item)
+
+    def _queue_jump(self, position: int):
+        item = self.play_queue.jump(position)
+        if item is not None:
+            self._play_item(item)
+
+    def _queue_remove(self, positions):
+        for pos in sorted(positions, reverse=True):
+            self.play_queue.remove(pos)
+        self._queue_changed()
+
+    def _queue_clear(self):
+        self.play_queue.clear_upcoming()
+        self._queue_changed()
+
+    def _queue_changed(self):
+        if self.player_view is not None:
+            self.player_view.queue_changed()
 
     # ---------------------------------------------------------------- player bar (shared)
     def _ensure_player(self):
         if self.player is not None:
             return
+        from audyax.gui.player_view import load_cover
         colors = {k: C[k] for k in ("card", "text", "muted", "accent", "accent_hover",
                                      "on_accent", "hover", "border")}
         fonts = {"bold": self.f_bold, "normal": self.f_normal, "small": self.f_small}
         self.player = PlayerBar(
-            self, colors, fonts, neighbor=self._player_neighbor,
+            self, colors, fonts, neighbor=lambda _item, _step: None, queue=self.play_queue,
             on_volume_change=lambda v: self.cfg.__setitem__("volume", round(v, 2)),
             on_close=self._on_player_closed, on_track_change=self._on_track_change,
+            on_modes_change=self._on_modes_change, cover_loader=lambda item: load_cover(item["path"]),
             volume=float(self.cfg.get("volume", 0.8)))
 
     def _play_item(self, item: dict):
-        """Plays a song from the download list (source "list") or the library ("library").
-        The bar sits below both views, so the music goes on when switching between them."""
+        """Plays one song. The bar sits below both views (downloader and player), so the
+        music goes on when switching between them."""
         self._ensure_player()
         try:
             self.player.play(item)
@@ -67,20 +110,20 @@ class PlayerMixin:
             return
         self.player.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(0, 12))
 
-    def _player_neighbor(self, item, step):
-        """Previous/next follows the place the song was started from."""
-        if item.get("source") == "library":
-            return self.player_view.neighbor(item, step) if self.player_view is not None else None
-        return self._neighbor(item, step)
-
     def _on_track_change(self, item):
         if self.player_view is not None:
             self.player_view.mark_playing(item["path"] if item.get("source") == "library" else None)
+        self._queue_changed()
+
+    def _on_modes_change(self, shuffle: bool, repeat: str):
+        self.cfg["shuffle"], self.cfg["repeat"] = shuffle, repeat
+        self._queue_changed()
 
     def _on_player_closed(self):
         self.player.grid_remove()
         if self.player_view is not None:
             self.player_view.mark_playing(None)
+        self._queue_changed()
 
     # ---------------------------------------------------------------- downloader <-> player
     def _on_logo_double_click(self, _event=None):

@@ -147,6 +147,10 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
     elif name == "artist":   # person: head and shoulders
         d.ellipse(box(.3, .08, .7, .48), fill=color)
         d.chord(box(.1, .56, .9, 1.36), start=180, end=360, fill=color)
+    elif name == "queue":    # list with a play mark
+        for y in (.24, .5, .76):
+            line([(.08, y), (.56, y)])
+        d.polygon([pt(.68, .54), pt(.96, .72), pt(.68, .9)], fill=color)
     elif name == "album":    # vinyl record
         d.ellipse(box(.06, .06, .94, .94), fill=color)
         d.ellipse(box(.24, .24, .76, .76), outline=(0, 0, 0, 0), width=max(1, w // 2))

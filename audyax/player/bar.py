@@ -48,6 +48,20 @@ def _draw(name: str, color: str, n: int = 64) -> "Image.Image":
         d.polygon([p(.12, .38), p(.32, .38), p(.54, .18), p(.54, .82), p(.32, .62), p(.12, .62)], fill=color)
         d.arc([p(.46, .3), p(.76, .7)], -55, 55, fill=color, width=max(2, n // 14))
         d.arc([p(.46, .16), p(.92, .84)], -55, 55, fill=color, width=max(2, n // 14))
+    elif name in ("repeat", "repeat_one"):
+        w = max(2, n // 11)
+        d.arc([p(.14, .22), p(.86, .78)], 200, 340, fill=color, width=w)
+        d.arc([p(.14, .22), p(.86, .78)], 20, 160, fill=color, width=w)
+        d.polygon([p(.74, .12), p(.92, .3), p(.7, .36)], fill=color)
+        d.polygon([p(.26, .88), p(.08, .7), p(.3, .64)], fill=color)
+        if name == "repeat_one":
+            d.ellipse([p(.36, .32), p(.64, .68)], fill=color)
+    elif name == "shuffle":
+        w = max(2, n // 11)
+        d.line([p(.08, .28), p(.3, .28), p(.62, .72), p(.8, .72)], fill=color, width=w, joint="curve")
+        d.line([p(.08, .72), p(.3, .72), p(.62, .28), p(.8, .28)], fill=color, width=w, joint="curve")
+        d.polygon([p(.78, .14), p(.96, .28), p(.78, .42)], fill=color)
+        d.polygon([p(.78, .58), p(.96, .72), p(.78, .86)], fill=color)
     elif name == "close":
         w = max(2, n // 10)
         d.line([p(.25, .25), p(.75, .75)], fill=color, width=w)
@@ -71,16 +85,22 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
       neighbor(item, step) -> the next (step=1) or previous (step=-1) item in the list, or None;
       on_volume_change(v) -> to remember the volume;
       on_close() -> the window hides the bar;
-      on_track_change(item) -> optional, called each time another song starts (e.g. to highlight it).
+      on_track_change(item) -> optional, called each time another song starts (e.g. to highlight it);
+      queue -> optional PlayQueue (audyax/player/queue.py): previous/next follow it instead of
+               neighbor(), and the shuffle and repeat buttons appear;
+      on_modes_change(shuffle, repeat) -> optional, to remember the shuffle/repeat buttons;
+      cover_loader(item) -> optional, gives the cover of an item that doesn't bring one.
     An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
-                 volume=0.8, engine=None, on_track_change=None):
+                 volume=0.8, engine=None, on_track_change=None, queue=None, on_modes_change=None,
+                 cover_loader=None):
         super().__init__(master, fg_color=colors["card"], corner_radius=14, border_width=1,
                          border_color=colors.get("border", colors["card"]))
         self.colors, self.fonts = colors, fonts
         self.neighbor, self.on_volume_change, self.on_close = neighbor, on_volume_change, on_close
         self.on_track_change = on_track_change
+        self.queue, self.on_modes_change, self.cover_loader = queue, on_modes_change, cover_loader
         self._end_pending = threading.Event()
         self.engine = engine or AudioEngine(on_finish=self._end_pending.set)
         self.engine.volume = volume
@@ -111,10 +131,17 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.grid(row=0, column=2, rowspan=2, padx=10)
+        if self.queue is not None:
+            self.btn_shuffle = self._button(buttons, "shuffle", self.toggle_shuffle, 14)
+            self.btn_shuffle.pack(side="left", padx=(0, 4))
         self._button(buttons, "previous", lambda: self.jump(-1), 14).pack(side="left", padx=2)
         self.btn_play = self._button(buttons, "pause", self.toggle, 18, accent=True)
         self.btn_play.pack(side="left", padx=4)
         self._button(buttons, "next", lambda: self.jump(1), 14).pack(side="left", padx=2)
+        if self.queue is not None:
+            self.btn_repeat = self._button(buttons, "repeat", self.cycle_repeat, 14)
+            self.btn_repeat.pack(side="left", padx=(4, 0))
+            self._show_modes()
         self.ico_play = _icon("play", c["on_accent"], 18)
         self.ico_pause = _icon("pause", c["on_accent"], 18)
 
@@ -151,6 +178,11 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             raise RuntimeError(reason)
         if not item.get("path") or not Path(item["path"]).exists():
             raise RuntimeError("el archivo ya no está en su carpeta")
+        if item.get("image") is None and self.cover_loader:
+            try:   # a copy: the queue doesn't keep a cover in memory for every song
+                item = {**item, "image": self.cover_loader(item)}
+            except Exception:
+                pass
         self.item = item
         self._end_pending.clear()
         self.engine.play(item["path"])
@@ -175,24 +207,52 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.engine.toggle()
         self.btn_play.configure(image=self.ico_pause if self.engine.status == "playing" else self.ico_play)
 
-    def jump(self, step: int):
-        """Previous (-1) or next (1). "Previous" after 3 s goes back to the start of the song."""
+    def jump(self, step: int, auto: bool = False):
+        """Previous (-1) or next (1). "Previous" after 3 s goes back to the start of the song.
+        auto=True: the song ended by itself (with repeat "one" it plays again)."""
         if not self.item:
             return
         if step < 0 and self.engine.position > 3:
             self.engine.seek(0)
             return
-        another = self.neighbor(self.item, step)
-        if another is None:
-            if step > 0:
-                self.engine.stop()
-                self.btn_play.configure(image=self.ico_play)
-            return
-        try:
-            self.play(another)
-        except RuntimeError:
-            self.item = another
-            self.jump(step)  # if that file no longer exists, move on to the next one
+        tries = (len(self.queue) if self.queue is not None else 0) + 50
+        while tries > 0:
+            tries -= 1
+            another = self._neighbor(step, auto)
+            if another is None:
+                if step > 0:
+                    self.engine.stop()
+                    self.btn_play.configure(image=self.ico_play)
+                return
+            try:
+                self.play(another)
+                return
+            except RuntimeError:
+                self.item, auto = another, False  # that file is gone: move on to the next one
+
+    def _neighbor(self, step, auto):
+        if self.queue is not None:
+            return self.queue.next(auto=auto) if step > 0 else self.queue.previous()
+        return self.neighbor(self.item, step)
+
+    def toggle_shuffle(self):
+        self.queue.set_shuffle(not self.queue.shuffle)
+        self._modes_changed()
+
+    def cycle_repeat(self):
+        self.queue.cycle_repeat()
+        self._modes_changed()
+
+    def _modes_changed(self):
+        self._show_modes()
+        if self.on_modes_change:
+            self.on_modes_change(self.queue.shuffle, self.queue.repeat)
+
+    def _show_modes(self):
+        c, q = self.colors, self.queue
+        self.btn_shuffle.configure(image=_icon("shuffle", c["accent"] if q.shuffle else c["muted"], 14))
+        self.btn_repeat.configure(image=_icon("repeat_one" if q.repeat == "one" else "repeat",
+                                              c["accent"] if q.repeat != "off" else c["muted"], 14))
 
     def close(self):
         self.engine.stop()
@@ -230,7 +290,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             return
         if self._end_pending.is_set():   # the song ended by itself: play the next one
             self._end_pending.clear()
-            self.jump(1)
+            self.jump(1, auto=True)
         if self.item:
             pos = self.engine.position
             if not self._dragging:

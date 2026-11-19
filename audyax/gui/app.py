@@ -52,6 +52,7 @@ from audyax.gui.style import (STATUS_COLORS, C, _draw_icon, choose_font, empty_i
 from audyax.gui.watched_window import WatchedMixin
 from audyax.gui.widgets import Notice
 from audyax.player.engine import audio_available
+from audyax.player.queue import PlayQueue
 
 # Drag and drop: optional (pip install tkinterdnd2). The app works the same without it.
 try:
@@ -119,6 +120,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.watched_window = None
         self.player = None          # mini player bar (created on first use)
         self.player_view = None     # player (part 2), shown instead of the downloader
+        self.play_queue = PlayQueue(shuffle=bool(self.cfg.get("shuffle")), repeat=self.cfg.get("repeat", "off"))
         self.view_mode = "downloads"   # "downloads" | "player" (double click on the logo switches)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
         self.cfg["watched"] = self.watched
@@ -421,7 +423,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         item("downloads", "watched", "Vigiladas", "eye", self._open_watched)
         item("downloads", "settings", "Configuración", "gear", self._open_settings)
         item("downloads", "about", "Acerca de", "info", self._about)
-        for view, ico in (("Canciones", "note"), ("Artistas", "artist"), ("Álbumes", "album")):
+        for view, ico in (("Canciones", "note"), ("Artistas", "artist"), ("Álbumes", "album"),
+                          ("Cola", "queue")):
             item("player", view, view, ico, lambda v=view: self._player_section(v))
         item("player", "about", "Acerca de", "info", self._about)
         self.nav["downloads"].pack(fill="x")
@@ -547,7 +550,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "notifications", "keep_in_background", "speed_limit_enabled", "speed_limit_mb",
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
-                "library_folder")},
+                "library_folder", "shuffle", "repeat")},
             "watched": self.watched,
         }
 

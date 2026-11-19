@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     # Mini player
     "volume": 0.8,
     "library_folder": "",            # player library; empty = the download folder
+    "shuffle": False,                # player: shuffle the queue
+    "repeat": "off",                 # player: "off" | "all" (the queue) | "one" (the song)
     # Watched playlists
     "watched": [],                 # [{url, name, folder, last_check, new_count}] (see watched.py)
     "check_watched": True,       # check them when AUDYAX opens

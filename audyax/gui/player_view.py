@@ -7,6 +7,7 @@ The library itself (scan, cache, groups, search) is in audyax/core/library.py, w
 
 import math
 import queue
+import sys
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +24,7 @@ except ImportError:  # the animation helpers can be imported (and tested) withou
 from audyax.core import library, tags
 from audyax.core.library import format_duration
 
-VIEWS = ("Canciones", "Artistas", "Álbumes")
+VIEWS = ("Canciones", "Artistas", "Álbumes", "Cola")
 
 # Song table: column -> (header, width, field used to sort)
 SONG_COLUMNS = {"title": ("Título", 260, "title"), "artist": ("Artista", 180, "artist"),
@@ -201,7 +202,7 @@ class IntroAnimation:
 # ==============================================================================
 # PLAYER VIEW (library)
 # ==============================================================================
-def _cover_image(path):
+def load_cover(path):
     """The embedded cover as a PIL image (or None)."""
     try:
         data = tags.read_cover(path)
@@ -286,6 +287,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.l_section.pack(side="left")
         self.l_folder = ctk.CTkLabel(nav, text="", font=app.f_small, text_color=C["muted"], anchor="e")
         self.l_folder.pack(side="right")
+        self.btn_clear_queue = app._button(nav, "Vaciar cola", app._queue_clear, icon("trash", 16), height=30)
 
     def _build_body(self):
         C = self.C
@@ -327,6 +329,10 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.songs.configure(yscrollcommand=sb2.set)
         self.songs.bind("<Double-Button-1>", self._on_song_double_click)
         self.songs.bind("<Return>", lambda _e: self._play_selected())
+        self.songs.bind("<Delete>", lambda _e: self._remove_from_queue())
+        for button in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
+            if button:
+                self.songs.bind(button, self._song_menu)
 
         self.l_empty = ctk.CTkLabel(body, text="", font=self.app.f_normal, text_color=C["muted"],
                                     justify="center")
@@ -355,6 +361,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         for tree in (self.songs, self.groups):
             tree.tag_configure("odd", background=C["row_b"][i])
             tree.tag_configure("playing", foreground=C["accent"][i])
+            tree.tag_configure("played", foreground=C["muted"][i])
 
     def apply_theme(self):
         self._apply_tree_style()
@@ -453,6 +460,11 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             return
         self.view = view
         self.l_section.configure(text=view)
+        if view == "Cola":
+            self.btn_clear_queue.pack(side="right", padx=(0, 12))
+        else:
+            self.btn_clear_queue.pack_forget()
+            self.l_folder.configure(text=self.lib.folder)
         self._fill_groups()
         self._fill_songs()
 
@@ -480,7 +492,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         selected = self.group_items.get(g.selection()[0]) if g.selection() else None
         g.delete(*g.get_children())
         self.group_items = {}
-        if self.view == "Canciones":
+        if self.view in ("Canciones", "Cola"):
             self.group_frame.grid_forget()
             return
         self.group_frame.grid(row=0, column=0, sticky="nsw")
@@ -526,6 +538,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         return library.search(tracks, self.query())
 
     def _fill_songs(self):
+        if self.view == "Cola":
+            self._fill_queue()
+            return
         tracks = self._current_tracks()
         column, reverse = self.order
         if self.view == "Álbumes" and column == "artist":   # an album keeps its own order
@@ -558,51 +573,121 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.l_empty.configure(text=text)
         self.l_empty.place(relx=0.5, rely=0.5, anchor="center")
 
+    def _fill_queue(self):
+        """The "Cola" section: what was played (gray), what is playing (▶) and what's next,
+        in play order. Each row's id is its position in the queue."""
+        q, s = self.app.play_queue, self.songs
+        s.delete(*s.get_children())
+        query = library.normalize(self.query()).split()
+        playing = self.app.player is not None and self.app.player.item is not None
+        shown = 0
+        for pos, item in enumerate(q.items):
+            text = library.normalize(" ".join(str(item.get(k) or "") for k in ("title", "artist", "album")))
+            if query and not all(w in text for w in query):
+                continue
+            is_current = pos == q.index and playing
+            row_tags = (("odd",) if shown % 2 else ()) + (("playing",) if is_current else
+                                                          ("played",) if pos < q.index else ())
+            s.insert("", "end", iid=str(pos), tags=row_tags,
+                     values=(("▶  " if is_current else "") + str(item.get("title") or Path(item["path"]).stem),
+                             item.get("artist") or library.NO_ARTIST, item.get("album") or "—",
+                             item.get("year") or "", format_duration(item.get("duration"))))
+            shown += 1
+        for col, (header, _w, _f) in SONG_COLUMNS.items():
+            s.heading(col, text=header)
+        if q.index >= 0 and s.exists(str(q.index)):
+            s.see(str(q.index))
+        if shown:
+            self.l_empty.place_forget()
+        else:
+            self.l_empty.configure(text="La cola está vacía.\n\nReproduce una canción, o clic derecho → "
+                                        "«Añadir a la cola»." if not query else
+                                   "Ninguna canción de la cola coincide con la búsqueda.")
+            self.l_empty.place(relx=0.5, rely=0.5, anchor="center")
+        n = len(q.upcoming())
+        self.l_folder.configure(text=f"{n} {'canción' if n == 1 else 'canciones'} por sonar")
+
+    def queue_changed(self):
+        if self.view == "Cola":
+            self._fill_songs()
+
+    def _remove_from_queue(self):
+        if self.view == "Cola":
+            self.app._queue_remove([int(i) for i in self.songs.selection()])
+
+    def _song_menu(self, event):
+        """Right click on a song: play it, play it next or add it to the queue
+        (all the selected songs if the click is on one of them)."""
+        row = self.songs.identify_row(event.y)
+        if not row:
+            return
+        if row not in self.songs.selection():
+            self.songs.selection_set(row)
+        selected = list(self.songs.selection())
+        app = self.app
+        menu = app._new_menu()
+        if self.view == "Cola":
+            menu.add_command(label="Reproducir", command=lambda: app._queue_jump(int(row)))
+            menu.add_command(label="Quitar de la cola", command=self._remove_from_queue)
+        else:
+            items = [self._item(t) for t in self.shown if t["path"] in selected]
+            menu.add_command(label="Reproducir", command=lambda: self.play_path(row))
+            menu.add_command(label="Reproducir a continuación", command=lambda: app._queue_play_next(items))
+            menu.add_command(label="Añadir a la cola", command=lambda: app._queue_add(items))
+        menu.tk_popup(event.x_root, event.y_root)
+
     def _sort_by(self, column):
+        if self.view == "Cola":
+            return   # the queue keeps its play order
         col, reverse = self.order
         self.order = (column, not reverse) if col == column else (column, False)
         self._fill_songs()
 
     # ---------------------------------------------------------------- playback
     def _item(self, track) -> dict:
+        """Queue item of a library song (the cover is read only when it plays)."""
         return {"id": track["path"], "path": track["path"], "title": track["title"],
-                "artist": track.get("artist") or "", "image": _cover_image(track["path"]),
+                "artist": track.get("artist") or "", "album": track.get("album") or "",
+                "year": track.get("year") or "", "duration": track.get("duration") or 0,
                 "source": "library"}
-
-    def neighbor(self, item, step):
-        """Previous/next song in the table as it's shown (filtered and sorted)."""
-        paths = [t["path"] for t in self.shown]
-        if not paths:
-            return None
-        i = paths.index(item["id"]) if item["id"] in paths else (-1 if step > 0 else len(paths))
-        j = i + step
-        return self._item(self.shown[j]) if 0 <= j < len(paths) else None
 
     def _on_song_double_click(self, event):
         if self.songs.identify_region(event.x, event.y) == "heading":
             return
         row = self.songs.identify_row(event.y)
         if row:
-            self.play_path(row)
+            self._play_row(row)
 
     def _play_selected(self):
         sel = self.songs.selection()
         if sel:
-            self.play_path(sel[0])
+            self._play_row(sel[0])
+
+    def _play_row(self, row):
+        if self.view == "Cola":
+            self.app._queue_jump(int(row))
+        else:
+            self.play_path(row)
 
     def _play_index(self, i):
         if 0 <= i < len(self.shown):
             self.play_path(self.shown[i]["path"])
 
     def play_path(self, path):
-        track = next((t for t in self.shown if t["path"] == path), None) or \
-            next((t for t in self.lib.tracks if t["path"] == path), None)
+        """Plays a song; the queue becomes the table as it's shown (filtered and sorted)."""
+        paths = [t["path"] for t in self.shown]
+        if path in paths:
+            self.app._play_queue([self._item(t) for t in self.shown], paths.index(path))
+            return
+        track = next((t for t in self.lib.tracks if t["path"] == path), None)
         if track is not None:
-            self.app._play_item(self._item(track))
+            self.app._play_queue([self._item(track)])
 
     def mark_playing(self, path):
         """Highlights the song that is playing (None = none of the library's)."""
         self.playing = path
+        if self.view == "Cola":
+            return   # the queue table is redrawn by queue_changed()
         for n, iid in enumerate(self.songs.get_children()):
             is_it = iid == path
             self.songs.item(iid, tags=(("odd",) if n % 2 else ()) + (("playing",) if is_it else ()))
