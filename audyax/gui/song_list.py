@@ -425,6 +425,9 @@ class SongListMixin:
             menu.add_command(label="Reintentar", command=self._retry)
         if self._is_playable(f):
             menu.add_command(label="Reproducir", command=lambda: self._play(vid))
+            menu.add_command(label="Reproducir a continuación",
+                             command=lambda: self._queue_play_next([self._player_item(vid)]))
+            menu.add_command(label="Añadir a la cola", command=lambda: self._queue_add([self._player_item(vid)]))
         if f["color"] == "green" and f["path"]:
             menu.add_command(label="Editar etiquetas", command=self._edit_tags)
             menu.add_command(label="Abrir carpeta", command=self._open_song_folder)
