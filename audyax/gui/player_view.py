@@ -21,10 +21,10 @@ try:
 except ImportError:  # the animation helpers can be imported (and tested) without a UI
     ctk = None
 
-from audyax.core import library, tags
+from audyax.core import library, playlists, tags
 from audyax.core.library import format_duration
 
-VIEWS = ("Canciones", "Artistas", "Álbumes", "Cola")
+VIEWS = ("Canciones", "Artistas", "Álbumes", "Listas", "Cola")
 
 # Song table: column -> (header, width, field used to sort)
 SONG_COLUMNS = {"title": ("Título", 260, "title"), "artist": ("Artista", 180, "artist"),
@@ -288,6 +288,10 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.l_folder = ctk.CTkLabel(nav, text="", font=app.f_small, text_color=C["muted"], anchor="e")
         self.l_folder.pack(side="right")
         self.btn_clear_queue = app._button(nav, "Vaciar cola", app._queue_clear, icon("trash", 16), height=30)
+        self.btn_save_queue = app._button(nav, "Guardar como lista", self._save_queue_as_playlist, height=30)
+        self.btn_new_list = app._button(nav, "Nueva lista", lambda: self._new_playlist([]), height=30)
+        self._section_buttons = {"Cola": (self.btn_clear_queue, self.btn_save_queue),
+                                 "Listas": (self.btn_new_list,)}
 
     def _build_body(self):
         C = self.C
@@ -311,6 +315,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.groups.bind("<<TreeviewSelect>>", lambda _e: self._fill_songs())
         self.groups.bind("<Double-Button-1>", lambda _e: self._play_index(0))
         self.groups.bind("<Return>", lambda _e: self._play_index(0))
+        for button in ("<Button-3>", "<Button-2>" if sys.platform == "darwin" else None):
+            if button:
+                self.groups.bind(button, self._group_menu)
 
         # right: songs
         songs = ctk.CTkFrame(body, fg_color="transparent")
@@ -450,6 +457,18 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.l_stats.configure(text=text)
         self.l_folder.configure(text=self.lib.folder)
 
+    def _flash(self, text: str, ms: int = 4000):
+        """Shows a short message where the library totals are, then the totals again."""
+        self.l_stats.configure(text=text, text_color=self.C["accent"])
+        if getattr(self, "_flash_job", None):
+            self.after_cancel(self._flash_job)
+
+        def back():
+            self._flash_job = None
+            self.l_stats.configure(text_color=self.C["muted"])
+            self._set_stats()
+        self._flash_job = self.after(ms, back)
+
     def _refresh_all(self):
         self._set_stats()
         self._fill_groups()
@@ -460,10 +479,13 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             return
         self.view = view
         self.l_section.configure(text=view)
-        if view == "Cola":
-            self.btn_clear_queue.pack(side="right", padx=(0, 12))
-        else:
-            self.btn_clear_queue.pack_forget()
+        for section, buttons in self._section_buttons.items():
+            for b in buttons:
+                if section == view:
+                    b.pack(side="right", padx=(0, 10))
+                else:
+                    b.pack_forget()
+        if view != "Cola":
             self.l_folder.configure(text=self.lib.folder)
         self._fill_groups()
         self._fill_songs()
@@ -501,7 +523,14 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         keep_artists = {library.normalize(library.artist_of(t)) for t in matching} if matching is not None else None
         keep_albums = {library.album_key(t) for t in matching} if matching is not None else None
         n = 0
-        if self.view == "Artistas":
+        if self.view == "Listas":
+            for name, path in playlists.list_playlists(self.lib.folder):
+                n_songs = len(playlists.read_playlist(path))
+                iid = g.insert("", "end", text=f"  {name}  ·  {n_songs} {'canción' if n_songs == 1 else 'canciones'}",
+                               tags=("odd",) if n % 2 else ())
+                self.group_items[iid] = str(path)
+                n += 1
+        elif self.view == "Artistas":
             for name, songs, albums in self.lib.artists():
                 if keep_artists is not None and library.normalize(name) not in keep_artists:
                     continue
@@ -521,7 +550,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
                 self.group_items[iid] = a["key"]
                 n += 1
         children = g.get_children()
-        if children:   # keep the selected artist/album if it's still there
+        if self.view == "Listas" and not children:
+            self.group_frame.grid(row=0, column=0, sticky="nsw")
+        if children:   # keep the selected artist/album/playlist if it's still there
             again = next((i for i in children if self.group_items[i] == selected), children[0])
             g.selection_set(again)
             g.focus(again)
@@ -534,8 +565,32 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             key = self.group_items.get(sel[0]) if sel else None
             if key is None:
                 return []
-            tracks = self.lib.tracks_of_artist(key) if self.view == "Artistas" else self.lib.tracks_of_album(key)
+            if self.view == "Listas":
+                tracks = self._playlist_tracks(key)
+            else:
+                tracks = self.lib.tracks_of_artist(key) if self.view == "Artistas" else self.lib.tracks_of_album(key)
         return library.search(tracks, self.query())
+
+    def _playlist_tracks(self, playlist_path):
+        """Songs of a playlist in its order; each one knows its position ("pos") so the same
+        song can be in it twice. Songs not in the library are read from the file (or shown
+        as missing)."""
+        by_path = {t["path"]: t for t in self.lib.tracks}
+        out = []
+        for pos, path in enumerate(playlists.read_playlist(playlist_path)):
+            t = by_path.get(path)
+            if t is None:
+                exists = Path(path).is_file()
+                t = library.read_track(path) if exists else \
+                    {"path": path, "title": Path(path).stem, "artist": "", "album": "", "year": "", "genre": "",
+                     "duration": 0, "mtime": 0, "size": 0}
+                t = {**t, "missing": not exists}
+            out.append({**t, "pos": pos})
+        return out
+
+    def _selected_playlist(self):
+        sel = self.groups.selection() if self.view == "Listas" else ()
+        return self.group_items.get(sel[0]) if sel else None
 
     def _fill_songs(self):
         if self.view == "Cola":
@@ -543,7 +598,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             return
         tracks = self._current_tracks()
         column, reverse = self.order
-        if self.view == "Álbumes" and column == "artist":   # an album keeps its own order
+        if self.view == "Listas":
+            pass                                               # a playlist keeps its own order
+        elif self.view == "Álbumes" and column == "artist":   # an album keeps its own order
             tracks = sorted(tracks, key=lambda t: Path(t["path"]).name.lower())
         else:
             tracks = library.sort_tracks(tracks, SONG_COLUMNS[column][2], reverse)
@@ -552,18 +609,35 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         s.delete(*s.get_children())
         for n, t in enumerate(tracks):
             is_it = t["path"] == self.playing
-            row_tags = (("odd",) if n % 2 else ()) + (("playing",) if is_it else ())
-            s.insert("", "end", iid=t["path"], tags=row_tags,
-                     values=(("▶  " if is_it else "") + t["title"], library.artist_of(t), library.album_of(t),
+            row_tags = (("odd",) if n % 2 else ()) + (("playing",) if is_it else
+                                                      ("played",) if t.get("missing") else ())
+            title = t["title"] + ("  (no encontrada)" if t.get("missing") else "")
+            s.insert("", "end", iid=self._row_id(t), tags=row_tags,
+                     values=(("▶  " if is_it else "") + title, library.artist_of(t), library.album_of(t),
                              t.get("year") or "", format_duration(t.get("duration"))))
         for col, (header, _w, _f) in SONG_COLUMNS.items():
-            arrow = (" ▼" if reverse else " ▲") if col == column else ""
+            arrow = (" ▼" if reverse else " ▲") if col == column and self.view != "Listas" else ""
             s.heading(col, text=header + arrow)
         self._show_empty_message(tracks)
+
+    def _row_id(self, track) -> str:
+        """Table row id: the file path, or its position in a playlist (it may repeat)."""
+        return f"#{track['pos']}" if self.view == "Listas" else track["path"]
+
+    def _track_of_row(self, row):
+        return next((t for t in self.shown if self._row_id(t) == row), None)
 
     def _show_empty_message(self, tracks):
         if tracks or (self._scanning and not self.lib.tracks):
             self.l_empty.place_forget()
+            return
+        if self.view == "Listas":
+            text = ("Todavía no tienes listas.\n\nCrea una con «Nueva lista», o clic derecho en una canción → "
+                    "«Añadir a una lista»." if not self.group_items else
+                    "Esta lista está vacía." if not self.query().strip() else
+                    "Ninguna canción de la lista coincide con la búsqueda.")
+            self.l_empty.configure(text=text)
+            self.l_empty.place(relx=0.5, rely=0.5, anchor="center")
             return
         if not self.lib.tracks:
             text = (f"No hay música en\n{self.lib.folder}\n\nDescarga canciones o elige otra carpeta "
@@ -614,6 +688,8 @@ class PlayerView(ctk.CTkFrame if ctk else object):
     def _remove_from_queue(self):
         if self.view == "Cola":
             self.app._queue_remove([int(i) for i in self.songs.selection()])
+        elif self.view == "Listas":
+            self._remove_from_playlist()
 
     def _song_menu(self, event):
         """Right click on a song: play it, play it next or add it to the queue
@@ -627,18 +703,137 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         app = self.app
         menu = app._new_menu()
         if self.view == "Cola":
+            q = app.play_queue
+            items = [q.items[int(r)] for r in selected if int(r) < len(q.items)]
             menu.add_command(label="Reproducir", command=lambda: app._queue_jump(int(row)))
             menu.add_command(label="Quitar de la cola", command=self._remove_from_queue)
         else:
-            items = [self._item(t) for t in self.shown if t["path"] in selected]
-            menu.add_command(label="Reproducir", command=lambda: self.play_path(row))
+            items = [self._item(t) for t in self.shown if self._row_id(t) in selected]
+            menu.add_command(label="Reproducir", command=lambda: self._play_row(row))
             menu.add_command(label="Reproducir a continuación", command=lambda: app._queue_play_next(items))
             menu.add_command(label="Añadir a la cola", command=lambda: app._queue_add(items))
+            if self.view == "Listas":
+                menu.add_command(label="Quitar de la lista", command=self._remove_from_playlist)
+        menu.add_cascade(label="Añadir a una lista", menu=self._playlists_menu(menu, items))
         menu.tk_popup(event.x_root, event.y_root)
 
+    # ---------------------------------------------------------------- playlists
+    def _playlists_menu(self, parent, items):
+        sub = self.app._new_menu()
+        for name, path in playlists.list_playlists(self.lib.folder):
+            sub.add_command(label=name, command=lambda p=path: self._add_to_playlist(p, items))
+        if sub.index("end") is not None:
+            sub.add_separator()
+        sub.add_command(label="Nueva lista…", command=lambda: self._new_playlist(items))
+        return sub
+
+    def _ask_name(self, title, text):
+        dialog = ctk.CTkInputDialog(title=title, text=text, button_fg_color=self.C["accent"],
+                                    button_hover_color=self.C["accent_hover"])
+        name = dialog.get_input()
+        return name.strip() if name else ""
+
+    def _new_playlist(self, items):
+        from tkinter import messagebox
+        name = self._ask_name("Nueva lista", "Nombre de la lista:")
+        if not name:
+            return
+        try:
+            path = playlists.create_playlist(self.lib.folder, name, items)
+        except (ValueError, OSError) as e:
+            messagebox.showwarning("Nueva lista", str(e), parent=self)
+            return
+        self._show_playlist(path)
+
+    def _show_playlist(self, path):
+        """Goes to the Listas section with `path` selected."""
+        self.app._player_section("Listas")
+        self._fill_groups()
+        for iid, p in self.group_items.items():
+            if p == str(path):
+                self.groups.selection_set(iid)
+                self.groups.see(iid)
+        self._fill_songs()
+
+    def _add_to_playlist(self, path, items):
+        """Adds the songs at the end of the playlist (the ones already in it are skipped)."""
+        from tkinter import messagebox
+        current = self._playlist_tracks(path)
+        have = {t["path"] for t in current}
+        new = [i for i in items if i["path"] not in have]
+        try:
+            playlists.write_playlist(path, current + new)
+        except OSError as e:
+            messagebox.showwarning("Añadir a una lista", f"No se pudo guardar la lista: {e}", parent=self)
+            return
+        skipped = len(items) - len(new)
+        name = Path(path).stem
+        text = (f"{len(new)} {'canción añadida' if len(new) == 1 else 'canciones añadidas'} a «{name}»"
+                + (f" ({skipped} ya {'estaba' if skipped == 1 else 'estaban'})" if skipped else ""))
+        self._flash(text)
+        if self.view == "Listas":
+            self._fill_groups()
+            self._fill_songs()
+
+    def _remove_from_playlist(self):
+        path = self._selected_playlist()
+        rows = set(self.songs.selection())
+        if not path or not rows:
+            return
+        keep = [t for t in self._playlist_tracks(path) if f"#{t['pos']}" not in rows]
+        try:
+            playlists.write_playlist(path, keep)
+        except OSError:
+            return
+        self._fill_groups()
+        self._fill_songs()
+
+    def _group_menu(self, event):
+        """Right click on a playlist: play, rename, delete."""
+        if self.view != "Listas":
+            return
+        row = self.groups.identify_row(event.y)
+        if not row:
+            return
+        self.groups.selection_set(row)
+        path = self.group_items[row]
+        menu = self.app._new_menu()
+        menu.add_command(label="Reproducir", command=lambda: self._play_index(0))
+        menu.add_command(label="Añadir a la cola",
+                         command=lambda: self.app._queue_add([self._item(t) for t in self._playlist_tracks(path)]))
+        menu.add_separator()
+        menu.add_command(label="Renombrar…", command=lambda: self._rename_playlist(path))
+        menu.add_command(label="Eliminar lista", command=lambda: self._delete_playlist(path))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _rename_playlist(self, path):
+        from tkinter import messagebox
+        name = self._ask_name("Renombrar lista", f"Nuevo nombre para «{Path(path).stem}»:")
+        if not name:
+            return
+        try:
+            new = playlists.rename_playlist(self.lib.folder, path, name)
+        except (ValueError, OSError) as e:
+            messagebox.showwarning("Renombrar lista", str(e), parent=self)
+            return
+        self._show_playlist(new)
+
+    def _delete_playlist(self, path):
+        from tkinter import messagebox
+        if messagebox.askyesno("Eliminar lista", f"¿Eliminar la lista «{Path(path).stem}»?\n\n"
+                               "Solo se borra la lista; las canciones se quedan en tu carpeta.", parent=self):
+            playlists.delete_playlist(path)
+            self._fill_groups()
+            self._fill_songs()
+
+    def _save_queue_as_playlist(self):
+        items = list(self.app.play_queue.items)
+        if items:
+            self._new_playlist(items)
+
     def _sort_by(self, column):
-        if self.view == "Cola":
-            return   # the queue keeps its play order
+        if self.view in ("Cola", "Listas"):
+            return   # the queue and the playlists keep their own order
         col, reverse = self.order
         self.order = (column, not reverse) if col == column else (column, False)
         self._fill_songs()
@@ -666,12 +861,16 @@ class PlayerView(ctk.CTkFrame if ctk else object):
     def _play_row(self, row):
         if self.view == "Cola":
             self.app._queue_jump(int(row))
+        elif self.view == "Listas":
+            track = self._track_of_row(row)
+            if track is not None:
+                self.app._play_queue([self._item(t) for t in self.shown], self.shown.index(track))
         else:
             self.play_path(row)
 
     def _play_index(self, i):
         if 0 <= i < len(self.shown):
-            self.play_path(self.shown[i]["path"])
+            self._play_row(self._row_id(self.shown[i]))
 
     def play_path(self, path):
         """Plays a song; the queue becomes the table as it's shown (filtered and sorted)."""
@@ -688,6 +887,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.playing = path
         if self.view == "Cola":
             return   # the queue table is redrawn by queue_changed()
+        if self.view == "Listas":
+            self._fill_songs()   # rows are positions, not paths
+            return
         for n, iid in enumerate(self.songs.get_children()):
             is_it = iid == path
             self.songs.item(iid, tags=(("odd",) if n % 2 else ()) + (("playing",) if is_it else ()))

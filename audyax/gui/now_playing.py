@@ -1,0 +1,286 @@
+"""AUDYAX player: the "Reproduciendo" section (part 2, section 3). Big cover, the full
+lyrics (synced ones follow the song and a click on a line jumps there) and what's next in
+the queue. It reads the app's player bar and queue; it doesn't play anything by itself."""
+
+import threading
+import tkinter as tk
+from pathlib import Path
+
+import customtkinter as ctk
+from PIL import Image
+
+from audyax.core import lyrics
+from audyax.core.library import NO_ARTIST
+from audyax.gui.player_view import load_cover
+
+COVER_PX = 340
+UP_NEXT = 5
+
+
+class NowPlayingView(ctk.CTkFrame):
+    def __init__(self, app):
+        from audyax.gui.style import C
+        super().__init__(app, fg_color="transparent")
+        self.app, self.C = app, C
+        self.path = None            # song shown
+        self._lines, self._synced = [], False
+        self._current = -2          # highlighted lyric line
+        self._cover_img = None
+        self._searching = False
+        self._visible = False
+
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._build_left()
+        self._build_lyrics()
+        self._apply_text_style()
+        self.after(200, self._tick)
+
+    # ---------------------------------------------------------------- building
+    def _build_left(self):
+        C, app = self.C, self.app
+        left = ctk.CTkFrame(self, fg_color="transparent", width=COVER_PX)
+        left.grid(row=0, column=0, sticky="ns", padx=(0, 22))
+        self.l_cover = ctk.CTkLabel(left, text="", width=COVER_PX, height=COVER_PX, fg_color=C["card"],
+                                    corner_radius=18)
+        self.l_cover.pack(pady=(4, 14))
+        self.l_title = ctk.CTkLabel(left, text="", font=app.f_title, anchor="w", justify="left",
+                                    wraplength=COVER_PX)
+        self.l_title.pack(fill="x")
+        self.l_artist = ctk.CTkLabel(left, text="", font=app.f_detail, text_color=C["accent"], anchor="w",
+                                     justify="left", wraplength=COVER_PX)
+        self.l_artist.pack(fill="x", pady=(2, 0))
+        self.l_album = ctk.CTkLabel(left, text="", font=app.f_normal, text_color=C["muted"], anchor="w",
+                                    justify="left", wraplength=COVER_PX)
+        self.l_album.pack(fill="x", pady=(2, 16))
+        ctk.CTkLabel(left, text="A continuación", font=app.f_bold, anchor="w").pack(fill="x")
+        self.up_next = ctk.CTkFrame(left, fg_color="transparent")
+        self.up_next.pack(fill="x", pady=(4, 0))
+
+    def _build_lyrics(self):
+        C, app = self.C, self.app
+        box = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=14, border_width=1, border_color=C["border"])
+        box.grid(row=0, column=1, sticky="nsew")
+        box.grid_columnconfigure(0, weight=1)
+        box.grid_rowconfigure(1, weight=1)
+        head = ctk.CTkFrame(box, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 4))
+        ctk.CTkLabel(head, text="Letra", font=app.f_detail).pack(side="left")
+        self.l_kind = ctk.CTkLabel(head, text="", font=app.f_small, text_color=C["muted"])
+        self.l_kind.pack(side="left", padx=10)
+        self.btn_find = app._button(head, "Buscar letra", self._find_lyrics, height=30)
+        self.text = ctk.CTkTextbox(box, fg_color="transparent", wrap="word", activate_scrollbars=True,
+                                   font=app.f_normal, cursor="arrow", border_spacing=8)
+        self.text.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
+        self.text.configure(state="disabled")
+        self.l_empty = ctk.CTkLabel(box, text="", font=app.f_normal, text_color=C["muted"], justify="center")
+
+    def _apply_text_style(self):
+        C = self.C
+        i = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        family = self.app.f_normal.cget("family")
+        t = self.text._textbox
+        t.tag_configure("line", font=(family, 14), foreground=C["muted"][i], spacing1=4, spacing3=4,
+                        justify="center")
+        t.tag_configure("plain", font=(family, 14), foreground=C["text"][i], spacing1=3, spacing3=3,
+                        justify="center")
+        t.tag_configure("current", font=(family, 19, "bold"), foreground=C["accent"][i])
+        t.tag_configure("past", foreground=C["text"][i])
+        t.tag_raise("current")
+
+    def apply_theme(self):
+        self._apply_text_style()
+        self._show_up_next()
+
+    # ---------------------------------------------------------------- shown / hidden
+    def on_show(self):
+        self._visible = True
+        self._load_song(force=True)
+
+    def on_hide(self):
+        self._visible = False
+
+    # ---------------------------------------------------------------- song
+    def _playing_item(self):
+        bar = self.app.player
+        return bar.item if bar is not None else None
+
+    def song_changed(self):
+        """The app calls this when another song starts (or playback stops)."""
+        if self._visible:
+            self._load_song()
+
+    def queue_changed(self):
+        if self._visible:
+            self._show_up_next()
+
+    def _load_song(self, force=False):
+        item = self._playing_item()
+        path = item["path"] if item else None
+        if path == self.path and not force:
+            return
+        self.path = path
+        if item is None:
+            self.l_title.configure(text="Nada sonando")
+            self.l_artist.configure(text="")
+            self.l_album.configure(text="Reproduce algo desde Canciones, Artistas, Álbumes o tus listas.")
+            self._set_cover(None)
+            self._set_lyrics("")
+            self._show_up_next()
+            return
+        self.l_title.configure(text=item.get("title") or Path(path).stem)
+        self.l_artist.configure(text=item.get("artist") or NO_ARTIST)
+        album = " · ".join(str(x) for x in (item.get("album"), item.get("year")) if x)
+        self.l_album.configure(text=album)
+        self._set_cover(item.get("image") or load_cover(path))
+        self._set_lyrics(lyrics.read_lyrics(path))
+        self._show_up_next()
+
+    def _set_cover(self, image):
+        if image is None:
+            from audyax.gui.style import logo
+            self.l_cover.configure(image=logo(COVER_PX // 2))
+            return
+        try:
+            img = image.convert("RGB")
+            side = min(img.size)   # square crop (YouTube thumbnails are 16:9)
+            img = img.crop(((img.width - side) // 2, (img.height - side) // 2,
+                            (img.width + side) // 2, (img.height + side) // 2))
+            img = img.resize((COVER_PX * 2, COVER_PX * 2), Image.LANCZOS)
+            self._cover_img = ctk.CTkImage(light_image=img, dark_image=img, size=(COVER_PX, COVER_PX))
+            self.l_cover.configure(image=self._cover_img)
+        except Exception:
+            self.l_cover.configure(image=None)
+
+    # ---------------------------------------------------------------- lyrics
+    def _set_lyrics(self, text: str):
+        self._lines, self._synced = lyrics.lyric_lines(text)
+        self._current = -2
+        t = self.text._textbox
+        self.text.configure(state="normal")
+        t.delete("1.0", "end")
+        for i, (_sec, line) in enumerate(self._lines):
+            tags = ("line", f"l{i}") if self._synced else ("plain",)
+            t.insert("end", (line or "♪" if self._synced else line) + "\n", tags)
+            if self._synced:
+                t.tag_bind(f"l{i}", "<Button-1>", lambda _e, k=i: self._seek_line(k))
+                t.tag_bind(f"l{i}", "<Enter>", lambda _e: t.configure(cursor="hand2"))
+                t.tag_bind(f"l{i}", "<Leave>", lambda _e: t.configure(cursor="arrow"))
+        self.text.configure(state="disabled")
+        t.yview_moveto(0)
+        if self._lines:
+            self.l_empty.place_forget()
+            self.l_kind.configure(text="sincronizada · clic en una línea para ir ahí" if self._synced
+                                  else "sin sincronizar")
+            self.btn_find.pack_forget()
+        else:
+            self.l_kind.configure(text="")
+            if self.path:
+                self.l_empty.configure(text="Esta canción no tiene letra guardada.")
+                self.btn_find.pack(side="right")
+            else:
+                self.l_empty.configure(text="")
+                self.btn_find.pack_forget()
+            self.l_empty.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _seek_line(self, i):
+        bar = self.app.player
+        if bar is not None and bar.item and self._synced and 0 <= i < len(self._lines):
+            bar.engine.seek(max(0.0, self._lines[i][0]))
+
+    def _highlight(self, i):
+        """Marks line i as the current one and keeps it in the middle of the box."""
+        if i == self._current:
+            return
+        t = self.text._textbox
+        t.tag_remove("current", "1.0", "end")
+        t.tag_remove("past", "1.0", "end")
+        self._current = i
+        if i < 0:
+            return
+        t.tag_add("current", f"{i + 1}.0", f"{i + 1}.end")
+        if i > 0:
+            t.tag_add("past", "1.0", f"{i}.end")
+        first, last = t.yview()
+        n = max(1, len(self._lines))
+        t.yview_moveto(max(0.0, (i + 0.5) / n - (last - first) / 2))
+
+    def _find_lyrics(self):
+        """Looks for the lyrics on LRCLIB and saves them as the settings say (.lrc if the
+        settings have lyrics turned off, so the song file isn't touched)."""
+        item = self._playing_item()
+        if item is None or self._searching:
+            return
+        self._searching = True
+        self.btn_find.configure(state="disabled", text="Buscando…")
+        path, mode = item["path"], self.app.cfg.get("lyrics", "off")
+        mode = "lrc" if mode == "off" else mode
+        proxy = self.app.cfg.get("proxy", "")
+        duration = self.app.player.engine.duration or None
+
+        def work():
+            try:
+                found = lyrics.find_lyrics(item.get("title") or Path(path).stem, item.get("artist") or "",
+                                           item.get("album") or "", duration, proxy=proxy)
+                saved = lyrics.save_lyrics(path, found, mode) if found else []
+                result = "ok" if saved else "none"
+            except Exception:
+                result = "error"
+            self.after(0, lambda: self._found(path, result))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _found(self, path, result):
+        self._searching = False
+        self.btn_find.configure(state="normal", text="Buscar letra")
+        if path != self.path:
+            return
+        if result == "ok":
+            self._set_lyrics(lyrics.read_lyrics(path))
+            if self.app.player is not None:
+                self.app.player.reload_lyrics()
+        else:
+            self.l_empty.configure(text="No se encontró la letra de esta canción." if result == "none"
+                                   else "No se pudo buscar la letra (¿sin conexión?).")
+
+    # ---------------------------------------------------------------- up next
+    def _show_up_next(self):
+        for w in self.up_next.winfo_children():
+            w.destroy()
+        q = self.app.play_queue
+        upcoming = q.upcoming()[:UP_NEXT] if self._playing_item() else []
+        if not upcoming:
+            ctk.CTkLabel(self.up_next, text="Nada más en la cola", font=self.app.f_small,
+                         text_color=self.C["muted"], anchor="w").pack(fill="x")
+            return
+        for k, item in enumerate(upcoming):
+            row = ctk.CTkButton(self.up_next, anchor="w", height=30, corner_radius=8, fg_color="transparent",
+                                hover_color=self.C["hover"], text_color=self.C["text"], font=self.app.f_small,
+                                text=_short(f"{item.get('title') or Path(item['path']).stem}  ·  "
+                                            f"{item.get('artist') or NO_ARTIST}", 48),
+                                command=lambda pos=q.index + 1 + k: self.app._queue_jump(pos))
+            row.pack(fill="x")
+        rest = len(q.upcoming()) - len(upcoming)
+        if rest > 0:
+            ctk.CTkLabel(self.up_next, text=f"y {rest} más en la cola", font=self.app.f_small,
+                         text_color=self.C["muted"], anchor="w").pack(fill="x", padx=12)
+
+    # ---------------------------------------------------------------- refresh
+    def _tick(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if self._visible:
+            item = self._playing_item()
+            if (item["path"] if item else None) != self.path:
+                self._load_song()
+            if self._synced and item is not None:
+                self._highlight(lyrics.current_line(self._lines, self.app.player.engine.position))
+        self.after(200, self._tick)
+
+
+def _short(text: str, n: int) -> str:
+    text = "".join(c if ord(c) <= 0xFFFF else "□" for c in str(text or ""))
+    return text if len(text) <= n else text[: n - 1] + "…"
+

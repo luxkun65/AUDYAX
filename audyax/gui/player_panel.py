@@ -83,6 +83,8 @@ class PlayerMixin:
     def _queue_changed(self):
         if self.player_view is not None:
             self.player_view.queue_changed()
+        if self.now_playing is not None:
+            self.now_playing.queue_changed()
 
     # ---------------------------------------------------------------- player bar (shared)
     def _ensure_player(self):
@@ -97,6 +99,7 @@ class PlayerMixin:
             on_volume_change=lambda v: self.cfg.__setitem__("volume", round(v, 2)),
             on_close=self._on_player_closed, on_track_change=self._on_track_change,
             on_modes_change=self._on_modes_change, cover_loader=lambda item: load_cover(item["path"]),
+            on_open=self._open_now_playing,
             volume=float(self.cfg.get("volume", 0.8)))
 
     def _play_item(self, item: dict):
@@ -113,6 +116,8 @@ class PlayerMixin:
     def _on_track_change(self, item):
         if self.player_view is not None:
             self.player_view.mark_playing(item["path"] if item.get("source") == "library" else None)
+        if self.now_playing is not None:
+            self.now_playing.song_changed()
         self._queue_changed()
 
     def _on_modes_change(self, shuffle: bool, repeat: str):
@@ -123,6 +128,8 @@ class PlayerMixin:
         self.player.grid_remove()
         if self.player_view is not None:
             self.player_view.mark_playing(None)
+        if self.now_playing is not None:
+            self.now_playing.song_changed()
         self._queue_changed()
 
     # ---------------------------------------------------------------- downloader <-> player
@@ -153,19 +160,49 @@ class PlayerMixin:
                 from audyax.gui.player_view import PlayerView
                 self.player_view = PlayerView(self)
             self.main.grid_remove()
-            self.player_view.grid(row=0, column=1, sticky="nsew", padx=(14, 16), pady=(12, 10))
-            self.player_view.on_show()
+            self.player_view.on_show()     # brings the library up to date
+            self._show_player_section()
         else:
-            if self.player_view is not None:
-                self.player_view.grid_remove()
+            for w in (self.player_view, self.now_playing):
+                if w is not None:
+                    w.grid_remove()
+            if self.now_playing is not None:
+                self.now_playing.on_hide()
             self.main.grid()
         self._mark_nav()
 
-    def _player_section(self, view: str):
-        """Canciones / Artistas / Álbumes in the player's sidebar."""
-        if self.player_view is not None:
-            self.player_view.set_view(view)
+    def _show_player_section(self):
+        """Shows "Reproduciendo" or the library (Canciones, Artistas, Álbumes, Listas, Cola)."""
+        place = dict(row=0, column=1, sticky="nsew", padx=(14, 16), pady=(12, 10))
+        if self.player_section == "Reproduciendo":
+            if self.now_playing is None:
+                from audyax.gui.now_playing import NowPlayingView
+                self.now_playing = NowPlayingView(self)
+            self.player_view.grid_remove()
+            self.now_playing.grid(**place)
+            self.now_playing.on_show()
+        else:
+            if self.now_playing is not None:
+                self.now_playing.grid_remove()
+                self.now_playing.on_hide()
+            self.player_view.set_view(self.player_section)
+            self.player_view.grid(**place)
+
+    def _player_section(self, section: str):
+        """A section of the player's sidebar."""
+        self.player_section = section
+        if self.view_mode == PLAYER:
+            self._show_player_section()
         self._mark_nav()
+
+    def _open_now_playing(self):
+        """Click on the cover or title of the player bar: "Reproduciendo"."""
+        self.player_section = "Reproduciendo"
+        if self.view_mode == PLAYER:
+            self._show_player_section()
+            self._mark_nav()
+        else:
+            self._on_logo_double_click()
 
     def _go_home(self):
         """"Inicio" in the sidebar: back to the downloader (with the animation if needed)."""

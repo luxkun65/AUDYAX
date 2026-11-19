@@ -120,6 +120,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.watched_window = None
         self.player = None          # mini player bar (created on first use)
         self.player_view = None     # player (part 2), shown instead of the downloader
+        self.now_playing = None     # player's "Reproduciendo" section
+        self.player_section = "Canciones"
         self.play_queue = PlayQueue(shuffle=bool(self.cfg.get("shuffle")), repeat=self.cfg.get("repeat", "off"))
         self.view_mode = "downloads"   # "downloads" | "player" (double click on the logo switches)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
@@ -412,9 +414,11 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.nav_buttons = {"downloads": {}, "player": {}}
 
         def item(mode, key, text, ico, command=None):
-            button = ctk.CTkButton(self.nav[mode], text=text, compound="top", width=92, height=74,
+            # the player has more sections: shorter buttons so they fit in the minimum window height
+            tall = mode == "downloads"
+            button = ctk.CTkButton(self.nav[mode], text=text, compound="top", width=92, height=74 if tall else 60,
                                    corner_radius=12, font=self.f_small, command=command)
-            button.pack(padx=10, pady=3)
+            button.pack(padx=10, pady=3 if tall else 2)
             button._nav_icon = ico
             self.nav_buttons[mode][key] = button
             self._nav_style(button, False)
@@ -423,8 +427,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         item("downloads", "watched", "Vigiladas", "eye", self._open_watched)
         item("downloads", "settings", "Configuración", "gear", self._open_settings)
         item("downloads", "about", "Acerca de", "info", self._about)
-        for view, ico in (("Canciones", "note"), ("Artistas", "artist"), ("Álbumes", "album"),
-                          ("Cola", "queue")):
+        for view, ico in (("Reproduciendo", "playing"), ("Canciones", "note"), ("Artistas", "artist"),
+                          ("Álbumes", "album"), ("Listas", "playlist"), ("Cola", "queue")):
             item("player", view, view, ico, lambda v=view: self._player_section(v))
         item("player", "about", "Acerca de", "info", self._about)
         self.nav["downloads"].pack(fill="x")
@@ -455,7 +459,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 frame.pack(fill="x", after=self.l_logo)
             else:
                 frame.pack_forget()
-        current = "home" if mode == "downloads" else (self.player_view.view if self.player_view else "Canciones")
+        current = "home" if mode == "downloads" else self.player_section
         for key, button in self.nav_buttons[mode].items():
             self._nav_style(button, key == current)
 
@@ -492,6 +496,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         ctk.set_appearance_mode(mode)
         if self.player_view is not None:
             self.player_view.apply_theme()
+        if self.now_playing is not None:
+            self.now_playing.apply_theme()
         if mode == "dark":
             self.sw_theme.select()
         else:
