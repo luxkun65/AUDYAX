@@ -23,7 +23,8 @@ def test_create_read_and_list(lib):
                                                   t(lib, "a")])
     assert path == lib / "Listas" / "Para correr.m3u8"
     text = path.read_text(encoding="utf-8")
-    assert text.startswith("#EXTM3U\n#EXTINF:61,Soda - B\n../Soda/b.mp3\n")   # relative paths
+    relative = os.path.join("..", "Soda", "b.mp3")       # ..\\Soda\\b.mp3 on Windows
+    assert text.startswith(f"#EXTM3U\n#EXTINF:61,Soda - B\n{relative}\n")   # relative paths
     assert "#EXTINF:-1,a\n" in text
     assert pl.read_playlist(path) == [str((lib / "Soda" / "b.mp3").resolve()), str((lib / "Soda" / "a.mp3").resolve())]
     pl.create_playlist(lib, "álbum favorito")

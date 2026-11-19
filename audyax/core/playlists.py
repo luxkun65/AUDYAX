@@ -77,7 +77,7 @@ def write_playlist(path, tracks):
             text = str(song.resolve())
         name = " - ".join(x for x in (t.get("artist"), t.get("title")) if x) or song.stem
         seconds = int(round(float(t.get("duration") or 0))) or -1
-        lines += [f"#EXTINF:{seconds},{name}", text.replace("\\", "/") if os.sep == "/" else text]
+        lines += [f"#EXTINF:{seconds},{name}", text]   # native separators (read back on any system)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp, path)
