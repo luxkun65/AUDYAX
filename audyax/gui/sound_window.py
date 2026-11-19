@@ -109,7 +109,7 @@ class SoundWindow(ctk.CTkToplevel):
         ly = self._card("Letras")
         self.sw_lyrics = ctk.CTkSwitch(ly, text="Buscar la letra automáticamente si la canción no la tiene",
                                        font=app.f_normal, command=self._on_lyrics, progress_color=C["accent"])
-        if cfg.get("auto_lyrics", True):
+        if cfg.get("auto_lyrics", False):
             self.sw_lyrics.select()
         self.sw_lyrics.pack(anchor="w", padx=16)
         ctk.CTkLabel(ly, text="Se buscan en LRCLIB al reproducir y se guardan como dice Configuración → Letras "

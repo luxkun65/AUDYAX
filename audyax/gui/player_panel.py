@@ -137,7 +137,7 @@ class PlayerMixin:
         """A song without lyrics starts: look them up in the background (once per session)."""
         path = item.get("path")
         tried = self.__dict__.setdefault("_lyrics_tried", set())
-        if not path or path in tried or not self.cfg.get("auto_lyrics", True):
+        if not path or path in tried or not self.cfg.get("auto_lyrics", False):
             return
         tried.add(path)
         import threading

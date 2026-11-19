@@ -25,3 +25,8 @@ def test_fetch_and_save(tmp_path, monkeypatch):
         raise OSError("sin conexión")
     monkeypatch.setattr(lyrics, "find_lyrics", boom)
     assert lyrics.fetch_and_save(song, "A", "B") == "error"
+
+
+def test_automatic_lyrics_are_off_by_default():
+    from audyax.core.config import DEFAULT_CONFIG
+    assert DEFAULT_CONFIG["auto_lyrics"] is False
