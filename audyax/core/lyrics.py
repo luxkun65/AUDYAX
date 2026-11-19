@@ -223,3 +223,31 @@ def current_line(lines: list, seconds: float) -> int:
         else:
             break
     return current
+
+
+_TAG_RE = re.compile(r"^\[[a-zA-Z]+:.*\]$")   # [ar:…], [ti:…], [offset:…]
+
+
+def lyric_lines(text: str):
+    """Lyrics ready to show: (lines, synced).
+    Synced: [(seconds, line), ...] as parse_lrc gives them.
+    Not synced: [(None, line), ...] with LRC tags removed and at most one empty line in a row.
+    No lyrics: ([], False)."""
+    synced = parse_lrc(text)
+    if synced:
+        return synced, True
+    lines, blank = [], True
+    for raw in (text or "").splitlines():
+        raw = raw.strip()
+        if _TAG_RE.match(raw):
+            continue
+        if not raw:
+            if not blank:
+                lines.append((None, ""))
+            blank = True
+            continue
+        lines.append((None, raw))
+        blank = False
+    while lines and not lines[-1][1]:
+        lines.pop()
+    return lines, False

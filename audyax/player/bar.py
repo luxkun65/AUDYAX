@@ -89,18 +89,20 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
       queue -> optional PlayQueue (audyax/player/queue.py): previous/next follow it instead of
                neighbor(), and the shuffle and repeat buttons appear;
       on_modes_change(shuffle, repeat) -> optional, to remember the shuffle/repeat buttons;
-      cover_loader(item) -> optional, gives the cover of an item that doesn't bring one.
+      cover_loader(item) -> optional, gives the cover of an item that doesn't bring one;
+      on_open() -> optional, called when the cover or the title is clicked.
     An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
                  volume=0.8, engine=None, on_track_change=None, queue=None, on_modes_change=None,
-                 cover_loader=None):
+                 cover_loader=None, on_open=None):
         super().__init__(master, fg_color=colors["card"], corner_radius=14, border_width=1,
                          border_color=colors.get("border", colors["card"]))
         self.colors, self.fonts = colors, fonts
         self.neighbor, self.on_volume_change, self.on_close = neighbor, on_volume_change, on_close
         self.on_track_change = on_track_change
         self.queue, self.on_modes_change, self.cover_loader = queue, on_modes_change, cover_loader
+        self.on_open = on_open
         self._end_pending = threading.Event()
         self.engine = engine or AudioEngine(on_finish=self._end_pending.set)
         self.engine.volume = volume
@@ -128,6 +130,10 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.l_title.grid(row=0, column=1, sticky="sw", pady=(10, 0))
         self.l_sub = ctk.CTkLabel(self, text="", font=f["small"], text_color=c["muted"], anchor="w")
         self.l_sub.grid(row=1, column=1, sticky="nw", pady=(0, 10))
+        if self.on_open:
+            for w in (self.l_cover, self.l_title, self.l_sub):
+                w.configure(cursor="hand2")
+                w.bind("<Button-1>", lambda _e: self.on_open())
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.grid(row=0, column=2, rowspan=2, padx=10)
@@ -192,14 +198,19 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.l_total.configure(text=_format_time(self.engine.duration))
         self.bar.configure(to=max(1.0, self.engine.duration))
         self._set_cover(item.get("image"))
-        self._lines = []
-        try:
-            self._lines = lyrics.parse_lrc(lyrics.read_lyrics(item["path"]))
-        except Exception:
-            pass
+        self.reload_lyrics()
         self.btn_play.configure(image=self.ico_pause)
         if self.on_track_change:
             self.on_track_change(item)
+
+    def reload_lyrics(self):
+        """Reads the song's lyrics again (e.g. after they were just found and saved)."""
+        self._lines = []
+        if self.item:
+            try:
+                self._lines = lyrics.parse_lrc(lyrics.read_lyrics(self.item["path"]))
+            except Exception:
+                pass
 
     def toggle(self):
         if not self.item:

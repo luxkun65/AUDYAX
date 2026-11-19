@@ -147,6 +147,15 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
     elif name == "artist":   # person: head and shoulders
         d.ellipse(box(.3, .08, .7, .48), fill=color)
         d.chord(box(.1, .56, .9, 1.36), start=180, end=360, fill=color)
+    elif name == "playing":  # equalizer bars
+        for x, top in ((.12, .5), (.34, .18), (.56, .38), (.78, .08)):
+            d.rounded_rectangle(box(x, top, x + .14, .92), radius=max(1, w // 3), fill=color)
+    elif name == "playlist":  # stacked lines with a note
+        for y in (.2, .42):
+            line([(.06, y), (.7, y)])
+        line([(.06, .64), (.42, .64)])
+        d.ellipse(box(.52, .66, .74, .9), fill=color)
+        line([(.72, .78), (.72, .3), (.94, .38)])
     elif name == "queue":    # list with a play mark
         for y in (.24, .5, .76):
             line([(.08, y), (.56, y)])
