@@ -118,7 +118,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.export_window = None
         self.watched_window = None
         self.player = None          # mini player bar (created on first use)
-        self.player_window = None   # player window (part 2), opened from the sidebar logo
+        self.player_view = None     # player (part 2), shown instead of the downloader
+        self.view_mode = "downloads"   # "downloads" | "player" (double click on the logo switches)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
         self.cfg["watched"] = self.watched
         self.checking = set()           # urls of watched playlists being checked
@@ -396,22 +397,21 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
 
     def _build_sidebar(self):
         sidebar = ctk.CTkFrame(self, width=112, corner_radius=0, fg_color=C["sidebar"])
-        sidebar.grid(row=0, column=0, sticky="ns")
+        sidebar.grid(row=0, column=0, rowspan=2, sticky="ns")   # row 1: the player bar
         sidebar.grid_propagate(False)
         sidebar.pack_propagate(False)
         self.l_logo = ctk.CTkLabel(sidebar, text="", image=logo(56), cursor="hand2")
         self.l_logo.pack(pady=(16, 14))
-        self.l_logo.bind("<Double-Button-1>", self._on_logo_double_click)   # opens the player
+        self.l_logo.bind("<Double-Button-1>", self._on_logo_double_click)   # downloader <-> player
 
         def item(text, ico, active=False, command=None):
-            ctk.CTkButton(sidebar, text=text, image=icon(ico, 26, C["text"] if active else C["muted"]),
-                          compound="top", width=92, height=74, corner_radius=12, font=self.f_small,
-                          fg_color=C["nav_active"] if active else "transparent",
-                          hover_color=C["nav_active"] if active else C["hover"],
-                          text_color=C["text"] if active else C["muted"],
-                          command=command).pack(padx=10, pady=3)
+            button = ctk.CTkButton(sidebar, text=text, compound="top", width=92, height=74, corner_radius=12,
+                                   font=self.f_small, command=command)
+            button.pack(padx=10, pady=3)
+            self._nav_style(button, ico, active)
+            return button
 
-        item("Inicio", "home", active=True)
+        self.btn_home = item("Inicio", "home", active=True, command=self._go_home)
         item("Vigiladas", "eye", command=self._open_watched)
         item("Configuración", "gear", command=self._open_settings)
         item("Acerca de", "info", command=self._about)
@@ -424,6 +424,16 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         ctk.CTkLabel(sidebar, text="Modo oscuro", font=self.f_small, text_color=C["muted"]).pack(side="bottom")
         if self.theme == "dark":
             self.sw_theme.select()
+
+    def _nav_style(self, button, ico, active):
+        button.configure(image=icon(ico, 26, C["text"] if active else C["muted"]),
+                         fg_color=C["nav_active"] if active else "transparent",
+                         hover_color=C["nav_active"] if active else C["hover"],
+                         text_color=C["text"] if active else C["muted"])
+
+    def _mark_nav(self):
+        """"Inicio" is highlighted only while the downloader is shown."""
+        self._nav_style(self.btn_home, "home", self.view_mode == "downloads")
 
     # ---------------------------------------------------------------- theme / settings
     def _about(self):
@@ -456,8 +466,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _apply_theme(self, mode: str):
         self.theme = mode
         ctk.set_appearance_mode(mode)
-        if self.player_window is not None and self.player_window.winfo_exists():
-            self.player_window.apply_theme()
+        if self.player_view is not None:
+            self.player_view.apply_theme()
         if mode == "dark":
             self.sw_theme.select()
         else:
@@ -1031,7 +1041,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         - Typing in another box (list search, settings…): normal paste.
         - In the link box with something already typed: normal paste (it's being edited).
         - If the copied text isn't a link: it goes into the box to search it with Enter."""
-        if not in_entry and self._focus_in_text():
+        if not in_entry and (self._focus_in_text() or self.view_mode == "player"):
             return None
         if in_entry and self.var_url.get().strip():
             return None
@@ -1055,7 +1065,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
 
     def _shortcut_delete(self, _event=None):
         """Delete: removes the checked rows from the list or, if none, the selected one."""
-        if self._focus_in_text():
+        if self._focus_in_text() or self.view_mode == "player":
             return None
         target = self._checked() or ([self.sel] if self.sel in self.rows else [])
         if target:
@@ -1063,6 +1073,9 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         return "break"
 
     def _shortcut_search(self, _event=None):
+        if self.view_mode == "player":
+            self.player_view.focus_search()
+            return "break"
         self.filter_entry.focus_set()
         self.filter_entry._entry.select_range(0, "end")
         return "break"
@@ -1088,8 +1101,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _close(self):
         if self.player is not None:
             self.player.engine.stop()
-        if self.player_window is not None and self.player_window.winfo_exists():
-            self.player_window.close()
+        if self.player_view is not None:
+            self.player_view.shutdown()
         save_config(self._current_cfg())
         self._cancel()
         self.tray.hide()

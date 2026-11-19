@@ -1,12 +1,12 @@
-"""AUDYAX player window (part 2): the music library (songs, artists, albums) with its own
-player bar, plus the intro animation shown when the sidebar logo is double-clicked.
+"""AUDYAX player (part 2): the music library view (songs, artists, albums), shown in the
+main window in place of the downloader, plus the animation that switches between the two
+when the sidebar logo is double-clicked. Playback goes through the app's single player bar.
 
 The library itself (scan, cache, groups, search) is in audyax/core/library.py, without UI.
 """
 
 import math
 import queue
-import sys
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -76,15 +76,22 @@ def _mix(c1: str, c2: str, k: float) -> str:
     return "#" + "".join(f"{round(x + (y - x) * k):02x}" for x, y in zip(a, b))
 
 
+SWAP_AT = 0.5   # moment of the animation (0..1) when the view behind it changes: fully covered
+
+
 class IntroAnimation:
     """Borderless layer over the main window: the logo grows, the purple equalizer bounces,
-    "Reproductor" appears and everything fades out. on_done() is called at the end."""
+    `text` ("Reproductor" / "Descargas") appears and everything fades out.
+    on_swap() is called halfway, while the window is fully covered (that's when the view
+    behind changes), and on_done() at the end."""
 
     LOGO_PX = 200
 
-    def __init__(self, app, on_done):
+    def __init__(self, app, text, on_swap, on_done=None):
         from audyax.gui.style import C, resource_path
-        self.app, self.on_done = app, on_done
+        self.app, self.text_shown = app, text
+        self.on_swap, self.on_done = on_swap, on_done
+        self._swapped = False
         dark = ctk.get_appearance_mode() == "Dark"
         i = 1 if dark else 0
         self.bg, self.accent, self.text = C["bg"][i], C["accent"][i], C["text"][i]
@@ -147,7 +154,7 @@ class IntroAnimation:
             c.create_rectangle(x, top, x + bar_w, base, outline="",
                                fill=_mix(self.bg, self.accent, 0.45 + 0.55 * height))
         if f["text"] > 0:
-            c.create_text(cx, base + 34, text="Reproductor", font=(self.app.f_title.cget("family"), 22, "bold"),
+            c.create_text(cx, base + 34, text=self.text_shown, font=(self.app.f_title.cget("family"), 22, "bold"),
                           fill=_mix(self.bg, self.text, f["text"]))
 
     def _step(self):
@@ -157,6 +164,8 @@ class IntroAnimation:
         if t >= 1:
             self._finish()
             return
+        if t >= SWAP_AT:
+            self._swap()
         f = intro_frame(t)
         self._set_alpha(f["alpha"])
         try:
@@ -167,19 +176,30 @@ class IntroAnimation:
         self._elapsed += INTRO_STEP_MS
         self.top.after(INTRO_STEP_MS, self._step)
 
+    def _swap(self):
+        if not self._swapped:
+            self._swapped = True
+            self.on_swap()
+            if self.top is not None:
+                self.top.lift()   # the new view must not end up on top of the animation
+
     def _finish(self):
         if self.top is None:
             return
+        self._swap()              # skipped with a click: the view still changes
         top, self.top = self.top, None
         try:
             top.destroy()
         except tk.TclError:
             pass
-        self.on_done()
+        if self.on_done:
+            self.on_done()
+
+
 
 
 # ==============================================================================
-# PLAYER WINDOW
+# PLAYER VIEW (library)
 # ==============================================================================
 def _cover_image(path):
     """The embedded cover as a PIL image (or None)."""
@@ -190,54 +210,56 @@ def _cover_image(path):
         return None
 
 
-class PlayerWindow(ctk.CTkToplevel if ctk else object):
-    """Separate window: library of the music folder + player bar."""
+class PlayerView(ctk.CTkFrame if ctk else object):
+    """Library of the music folder, shown in the main window instead of the downloader.
+    The app shows/hides it; songs play through the app's player bar (app._play_item)."""
 
     def __init__(self, app):
         from audyax.gui.style import C, icon
-        super().__init__(app)
+        super().__init__(app, fg_color="transparent")
         self.app, self.C = app, C
-        self.title("AUDYAX — Reproductor")
-        self.geometry("1040x660")
-        self.minsize(820, 480)
-        self.configure(fg_color=C["bg"])
-        self.after(250, self._set_icon)
-
         self.lib = library.Library(self._folder())
         self.view = "Canciones"
         self.order = ("artist", False)
         self.shown = []                 # tracks in the song table, in the order shown
         self.group_items = {}           # group row id -> artist name / album key
+        self.playing = None             # path of the library song that is playing
         self._events = queue.Queue()    # scan thread -> UI
         self._cancel_scan = threading.Event()
         self._scanning = False
         self._search_job = None
-        self.bar = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
         self._build_header(icon)
         self._build_body()
         self._apply_tree_style()
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        self.bind("<Control-f>", lambda _e: self.e_search.focus())
-        self.bind("<Escape>", lambda _e: self.set_query(""))
-
         if self.lib.load():
             self._refresh_all()
         self.after(100, self._poll)
-        self.after(200, self.rescan)
-        self.after(150, self.focus)
+
+    def on_show(self):
+        """Each time the view appears: bring the library up to date (only changes are read)."""
+        folder = self._folder()
+        if folder != self.lib.folder:
+            self._switch_folder(folder)
+        else:
+            self.rescan()
+
+    def focus_search(self):
+        self.e_search.focus_set()
+        self.e_search._entry.select_range(0, "end")
 
     # ---------------------------------------------------------------- building
     def _folder(self) -> str:
         cfg = self.app.cfg
-        return cfg.get("library_folder") or self.app.var_folder.get().strip() or cfg["folder"]
+        folder = cfg.get("library_folder") or self.app.var_folder.get().strip() or cfg["folder"]
+        return str(Path(folder).expanduser())
 
     def _build_header(self, icon):
         C, app = self.C, self.app
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 8))
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         head.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(head, text="", image=icon("note", 30, C["accent"])).grid(row=0, column=0, rowspan=2,
                                                                          padx=(0, 10))
@@ -251,13 +273,14 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
                                      fg_color=C["input"], border_color=C["border"], text_color=C["text"])
         self.e_search.grid(row=0, column=2, rowspan=2, padx=(10, 6))
         self.e_search.bind("<KeyRelease>", lambda _e: self._search_later())
+        self.e_search.bind("<Escape>", lambda _e: self.set_query(""))
         self.btn_rescan = app._button(head, "Actualizar", self.rescan, icon("refresh", 16), height=34)
         self.btn_rescan.grid(row=0, column=3, rowspan=2, padx=6)
         app._button(head, "Carpeta…", self._choose_folder, icon("folder", 16), height=34).grid(
             row=0, column=4, rowspan=2, padx=(6, 0))
 
         nav = ctk.CTkFrame(self, fg_color="transparent")
-        nav.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 8))
+        nav.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self.seg = ctk.CTkSegmentedButton(nav, values=list(VIEWS), command=self._change_view,
                                           font=app.f_normal, height=32, selected_color=C["nav_active"],
                                           selected_hover_color=C["nav_active"], text_color=C["text"],
@@ -270,8 +293,8 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
 
     def _build_body(self):
         C = self.C
-        body =ctk.CTkFrame(self, fg_color=C["card"], corner_radius=14, border_width=1, border_color=C["border"])
-        body.grid(row=2, column=0, sticky="nsew", padx=18)
+        body = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=14, border_width=1, border_color=C["border"])
+        body.grid(row=2, column=0, sticky="nsew")
         body.grid_columnconfigure(1, weight=1)
         body.grid_rowconfigure(0, weight=1)
         self.body = body
@@ -282,7 +305,7 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
         self.group_frame.grid_columnconfigure(0, weight=1)
         self.groups = ttk.Treeview(self.group_frame, style="Library.Treeview", show="tree",
                                    selectmode="browse")
-        self.groups.column("#0", width=340)
+        self.groups.column("#0", width=320)
         self.groups.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         sb = ctk.CTkScrollbar(self.group_frame, command=self.groups.yview)
         sb.grid(row=0, column=1, sticky="ns", pady=8)
@@ -311,9 +334,6 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
 
         self.l_empty = ctk.CTkLabel(body, text="", font=self.app.f_normal, text_color=C["muted"],
                                     justify="center")
-        self.bar_holder = ctk.CTkFrame(self, fg_color="transparent")
-        self.bar_holder.grid(row=3, column=0, sticky="ew", padx=18, pady=(10, 14))
-        self.bar_holder.grid_columnconfigure(0, weight=1)
 
     def _apply_tree_style(self):
         """ttk tables don't follow customtkinter's theme by themselves: colors are set here
@@ -339,7 +359,6 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
         for tree in (self.songs, self.groups):
             tree.tag_configure("odd", background=C["row_b"][i])
             tree.tag_configure("playing", foreground=C["accent"][i])
-            tree.tag_configure("count", foreground=C["muted"][i])
 
     def apply_theme(self):
         self._apply_tree_style()
@@ -354,14 +373,15 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
         self._cancel_scan = cancel = threading.Event()
         self._events = events = queue.Queue()
         self.btn_rescan.configure(state="disabled")
-        self._set_stats("Buscando canciones…")
+        if not self.lib.tracks:
+            self._set_stats("Buscando canciones…")
         lib = self.lib
 
         def work():
             try:
                 stats = lib.scan(progress=lambda d, t: events.put(("progress", d, t)), cancel=cancel.is_set)
                 events.put(("done", stats))
-            except Exception as e:   # never leave the window stuck in "scanning"
+            except Exception as e:   # never leave the view stuck in "scanning"
                 events.put(("error", str(e)))
         threading.Thread(target=work, daemon=True).start()
 
@@ -381,37 +401,45 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
                     self._scanning = False
                     self.btn_rescan.configure(state="normal")
                     if ev[0] == "done" and ev[1] is not None:
-                        self._refresh_all()
+                        changed = ev[1]["added"] or ev[1]["updated"] or ev[1]["removed"]
+                        if changed or not self.songs.get_children():
+                            self._refresh_all()
+                        else:
+                            self._set_stats()
                     elif ev[0] == "error":
                         self._set_stats(f"No se pudo leer la carpeta: {ev[1]}")
                     last_progress = None
         except queue.Empty:
             pass
-        if last_progress:
+        if last_progress and not self.lib.tracks:
             self._set_stats(f"Buscando canciones… {last_progress[1]} de {last_progress[2]}")
         self.after(120, self._poll)
 
     def _choose_folder(self):
         chosen = filedialog.askdirectory(parent=self, initialdir=self.lib.folder or None,
                                          title="Carpeta de tu música")
-        if not chosen:
-            return
+        if chosen:
+            self.app.cfg["library_folder"] = str(Path(chosen))
+            self._switch_folder(self._folder())
+
+    def _switch_folder(self, folder):
         self._cancel_scan.set()
-        self.app.cfg["library_folder"] = str(Path(chosen))
-        self.lib = library.Library(chosen)
+        self.lib = library.Library(folder)
         self.lib.load()
         self._scanning = False
         self._refresh_all()
         self.rescan()
+
+    def shutdown(self):
+        self._cancel_scan.set()
 
     # ---------------------------------------------------------------- views
     def _set_stats(self, text=None):
         if text is None:
             n = len(self.lib.tracks)
             if n:
-                hours = self.lib.total_duration() / 3600
-                time = f"{hours:.1f} h".replace(".", ",") if hours >= 1 else format_duration(
-                    self.lib.total_duration())
+                total = self.lib.total_duration()
+                time = f"{total / 3600:.1f} h".replace(".", ",") if total >= 3600 else format_duration(total)
                 text = (f"{n} {'canción' if n == 1 else 'canciones'} · {len(self.lib.artists())} artistas · "
                         f"{len(self.lib.albums())} álbumes · {time}")
             else:
@@ -438,18 +466,6 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
             self.e_search.insert(0, text)
         self._on_search()
 
-    def _set_icon(self):
-        """Window icon: the .ico on Windows, the PNG elsewhere (Linux doesn't take .ico)."""
-        from audyax.gui.style import resource_path
-        try:
-            if sys.platform.startswith("win"):
-                self.iconbitmap(str(resource_path("audyax.ico")))
-            else:
-                self._icon = ImageTk.PhotoImage(Image.open(resource_path("audyax.png")), master=self)
-                self.iconphoto(False, self._icon)
-        except Exception:
-            pass
-
     def _search_later(self):
         if self._search_job:
             self.after_cancel(self._search_job)
@@ -462,6 +478,7 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
 
     def _fill_groups(self):
         g = self.groups
+        selected = self.group_items.get(g.selection()[0]) if g.selection() else None
         g.delete(*g.get_children())
         self.group_items = {}
         if self.view == "Canciones":
@@ -492,10 +509,12 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
                                tags=("odd",) if n % 2 else ())
                 self.group_items[iid] = a["key"]
                 n += 1
-        if g.get_children():
-            first = g.get_children()[0]
-            g.selection_set(first)
-            g.focus(first)
+        children = g.get_children()
+        if children:   # keep the selected artist/album if it's still there
+            again = next((i for i in children if self.group_items[i] == selected), children[0])
+            g.selection_set(again)
+            g.focus(again)
+            g.see(again)
 
     def _current_tracks(self):
         tracks = self.lib.tracks
@@ -517,20 +536,19 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
         self.shown = tracks
         s = self.songs
         s.delete(*s.get_children())
-        playing = self.bar.item["path"] if self.bar is not None and self.bar.item else None
         for n, t in enumerate(tracks):
-            row_tags = (("odd",) if n % 2 else ()) + (("playing",) if t["path"] == playing else ())
-            title = ("▶  " if t["path"] == playing else "") + t["title"]
+            is_it = t["path"] == self.playing
+            row_tags = (("odd",) if n % 2 else ()) + (("playing",) if is_it else ())
             s.insert("", "end", iid=t["path"], tags=row_tags,
-                     values=(title, library.artist_of(t), library.album_of(t), t.get("year") or "",
-                             format_duration(t.get("duration"))))
+                     values=(("▶  " if is_it else "") + t["title"], library.artist_of(t), library.album_of(t),
+                             t.get("year") or "", format_duration(t.get("duration"))))
         for col, (header, _w, _f) in SONG_COLUMNS.items():
             arrow = (" ▼" if reverse else " ▲") if col == column else ""
             s.heading(col, text=header + arrow)
         self._show_empty_message(tracks)
 
     def _show_empty_message(self, tracks):
-        if tracks or self._scanning and not self.lib.tracks:
+        if tracks or (self._scanning and not self.lib.tracks):
             self.l_empty.place_forget()
             return
         if not self.lib.tracks:
@@ -549,10 +567,10 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
     # ---------------------------------------------------------------- playback
     def _item(self, track) -> dict:
         return {"id": track["path"], "path": track["path"], "title": track["title"],
-                "artist": library.artist_of(track) if track.get("artist") else "",
-                "image": _cover_image(track["path"])}
+                "artist": track.get("artist") or "", "image": _cover_image(track["path"]),
+                "source": "library"}
 
-    def _neighbor(self, item, step):
+    def neighbor(self, item, step):
         """Previous/next song in the table as it's shown (filtered and sorted)."""
         paths = [t["path"] for t in self.shown]
         if not paths:
@@ -577,59 +595,19 @@ class PlayerWindow(ctk.CTkToplevel if ctk else object):
         if 0 <= i < len(self.shown):
             self.play_path(self.shown[i]["path"])
 
-    def _ensure_bar(self):
-        if self.bar is not None:
-            return
-        from audyax.player.bar import PlayerBar
-        C, app = self.C, self.app
-        colors = {k: C[k] for k in ("card", "text", "muted", "accent", "accent_hover", "on_accent",
-                                    "hover", "border")}
-        fonts = {"bold": app.f_bold, "normal": app.f_normal, "small": app.f_small}
-        self.bar = PlayerBar(self.bar_holder, colors, fonts, neighbor=self._neighbor,
-                             on_volume_change=lambda v: app.cfg.__setitem__("volume", round(v, 2)),
-                             on_close=self._on_bar_closed, volume=float(app.cfg.get("volume", 0.8)),
-                             on_track_change=self._mark_playing)
-
     def play_path(self, path):
-        from tkinter import messagebox
         track = next((t for t in self.shown if t["path"] == path), None) or \
             next((t for t in self.lib.tracks if t["path"] == path), None)
-        if track is None:
-            return
-        self._ensure_bar()
-        self.app._stop_mini_player()      # only one thing plays at a time
-        try:
-            self.bar.play(self._item(track))
-        except RuntimeError as e:
-            messagebox.showwarning("No se puede reproducir", f"No se pudo reproducir la canción: {e}.",
-                                   parent=self)
-            return
-        self.bar.grid(row=0, column=0, sticky="ew")
+        if track is not None:
+            self.app._play_item(self._item(track))
 
-    def _mark_playing(self, item):
-        """Highlights the song that is playing (also when it changes by itself)."""
-        playing = item["path"] if item else None
+    def mark_playing(self, path):
+        """Highlights the song that is playing (None = none of the library's)."""
+        self.playing = path
         for n, iid in enumerate(self.songs.get_children()):
-            base = ("odd",) if n % 2 else ()
-            is_it = iid == playing
-            self.songs.item(iid, tags=base + (("playing",) if is_it else ()))
+            is_it = iid == path
+            self.songs.item(iid, tags=(("odd",) if n % 2 else ()) + (("playing",) if is_it else ()))
             title = self.songs.set(iid, "title").removeprefix("▶  ")
             self.songs.set(iid, "title", ("▶  " if is_it else "") + title)
-        if playing and self.songs.exists(playing):
-            self.songs.see(playing)
-
-    def _on_bar_closed(self):
-        self._mark_playing(None)
-        if self.bar is not None:
-            self.bar.grid_remove()
-
-    def stop(self):
-        if self.bar is not None and self.bar.item:
-            self.bar.close()
-
-    def close(self):
-        self._cancel_scan.set()
-        if self.bar is not None:
-            self.bar.engine.stop()
-        self.app.player_window = None
-        self.destroy()
+        if path and self.songs.exists(path):
+            self.songs.see(path)

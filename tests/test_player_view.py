@@ -1,5 +1,5 @@
 """Player window helpers that don't need a screen: the logo intro animation."""
-from audyax.gui import player_window as pw
+from audyax.gui import player_view as pw
 
 
 def test_intro_starts_invisible_and_ends_invisible():
@@ -30,3 +30,7 @@ def test_intro_clamps_time_and_mixes_colors():
     assert pw._mix("#000000", "#ffffff", 0) == "#000000"
     assert pw._mix("#000000", "#ffffff", 1) == "#ffffff"
     assert pw._mix("#000000", "#ff0080", 0.5) == "#800040"
+
+
+def test_views_swap_while_the_window_is_fully_covered():
+    assert pw.intro_frame(pw.SWAP_AT)["alpha"] > 0.9
