@@ -404,17 +404,28 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.l_logo.pack(pady=(16, 14))
         self.l_logo.bind("<Double-Button-1>", self._on_logo_double_click)   # downloader <-> player
 
-        def item(text, ico, active=False, command=None):
-            button = ctk.CTkButton(sidebar, text=text, compound="top", width=92, height=74, corner_radius=12,
-                                   font=self.f_small, command=command)
-            button.pack(padx=10, pady=3)
-            self._nav_style(button, ico, active)
-            return button
+        # Each mode has its own navigation; the logo (double click) switches between them
+        self.nav = {"downloads": ctk.CTkFrame(sidebar, fg_color="transparent"),
+                    "player": ctk.CTkFrame(sidebar, fg_color="transparent")}
+        self.nav_buttons = {"downloads": {}, "player": {}}
 
-        self.btn_home = item("Inicio", "home", active=True, command=self._go_home)
-        item("Vigiladas", "eye", command=self._open_watched)
-        item("Configuración", "gear", command=self._open_settings)
-        item("Acerca de", "info", command=self._about)
+        def item(mode, key, text, ico, command=None):
+            button = ctk.CTkButton(self.nav[mode], text=text, compound="top", width=92, height=74,
+                                   corner_radius=12, font=self.f_small, command=command)
+            button.pack(padx=10, pady=3)
+            button._nav_icon = ico
+            self.nav_buttons[mode][key] = button
+            self._nav_style(button, False)
+
+        item("downloads", "home", "Inicio", "home", self._go_home)
+        item("downloads", "watched", "Vigiladas", "eye", self._open_watched)
+        item("downloads", "settings", "Configuración", "gear", self._open_settings)
+        item("downloads", "about", "Acerca de", "info", self._about)
+        for view, ico in (("Canciones", "note"), ("Artistas", "artist"), ("Álbumes", "album")):
+            item("player", view, view, ico, lambda v=view: self._player_section(v))
+        item("player", "about", "Acerca de", "info", self._about)
+        self.nav["downloads"].pack(fill="x")
+        self._mark_nav()
 
         ctk.CTkLabel(sidebar, text="", image=equalizer_image()).pack(side="bottom", pady=(0, 14))
         self.sw_theme = ctk.CTkSwitch(sidebar, text="", width=46, progress_color=C["accent"],
@@ -425,15 +436,25 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         if self.theme == "dark":
             self.sw_theme.select()
 
-    def _nav_style(self, button, ico, active):
+    def _nav_style(self, button, active):
+        ico = button._nav_icon
         button.configure(image=icon(ico, 26, C["text"] if active else C["muted"]),
                          fg_color=C["nav_active"] if active else "transparent",
                          hover_color=C["nav_active"] if active else C["hover"],
                          text_color=C["text"] if active else C["muted"])
 
     def _mark_nav(self):
-        """"Inicio" is highlighted only while the downloader is shown."""
-        self._nav_style(self.btn_home, "home", self.view_mode == "downloads")
+        """Shows the sidebar of the current mode and highlights where you are:
+        "Inicio" in the downloader; Canciones / Artistas / Álbumes in the player."""
+        mode = self.view_mode
+        for m, frame in self.nav.items():
+            if m == mode:
+                frame.pack(fill="x", after=self.l_logo)
+            else:
+                frame.pack_forget()
+        current = "home" if mode == "downloads" else (self.player_view.view if self.player_view else "Canciones")
+        for key, button in self.nav_buttons[mode].items():
+            self._nav_style(button, key == current)
 
     # ---------------------------------------------------------------- theme / settings
     def _about(self):

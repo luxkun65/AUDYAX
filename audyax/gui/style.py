@@ -144,6 +144,13 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
         d.chord(box(.04, .22, .96, 1.18), start=200, end=340, outline=color, width=w)
         d.chord(box(.04, -.18, .96, .78), start=20, end=160, outline=color, width=w)
         d.ellipse(box(.36, .36, .64, .64), fill=color)
+    elif name == "artist":   # person: head and shoulders
+        d.ellipse(box(.3, .08, .7, .48), fill=color)
+        d.chord(box(.1, .56, .9, 1.36), start=180, end=360, fill=color)
+    elif name == "album":    # vinyl record
+        d.ellipse(box(.06, .06, .94, .94), fill=color)
+        d.ellipse(box(.24, .24, .76, .76), outline=(0, 0, 0, 0), width=max(1, w // 2))
+        d.ellipse(box(.4, .4, .6, .6), fill=(0, 0, 0, 0))
     return im.resize((size, size), Image.LANCZOS)
 
 

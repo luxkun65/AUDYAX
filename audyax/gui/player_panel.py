@@ -118,6 +118,12 @@ class PlayerMixin:
             self.main.grid()
         self._mark_nav()
 
+    def _player_section(self, view: str):
+        """Canciones / Artistas / Álbumes in the player's sidebar."""
+        if self.player_view is not None:
+            self.player_view.set_view(view)
+        self._mark_nav()
+
     def _go_home(self):
         """"Inicio" in the sidebar: back to the downloader (with the animation if needed)."""
         if self.view_mode == PLAYER:

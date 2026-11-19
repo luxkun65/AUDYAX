@@ -279,15 +279,11 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         app._button(head, "Carpeta…", self._choose_folder, icon("folder", 16), height=34).grid(
             row=0, column=4, rowspan=2, padx=(6, 0))
 
+        # the section (Canciones / Artistas / Álbumes) is chosen in the sidebar; here, its title
         nav = ctk.CTkFrame(self, fg_color="transparent")
         nav.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        self.seg = ctk.CTkSegmentedButton(nav, values=list(VIEWS), command=self._change_view,
-                                          font=app.f_normal, height=32, selected_color=C["nav_active"],
-                                          selected_hover_color=C["nav_active"], text_color=C["text"],
-                                          unselected_color=C["card"], unselected_hover_color=C["hover"],
-                                          fg_color=C["card"])
-        self.seg.set(self.view)
-        self.seg.pack(side="left")
+        self.l_section = ctk.CTkLabel(nav, text=self.view, font=app.f_detail, anchor="w")
+        self.l_section.pack(side="left")
         self.l_folder = ctk.CTkLabel(nav, text="", font=app.f_small, text_color=C["muted"], anchor="e")
         self.l_folder.pack(side="right")
 
@@ -452,8 +448,11 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self._fill_groups()
         self._fill_songs()
 
-    def _change_view(self, view):
+    def set_view(self, view):
+        if view not in VIEWS or view == self.view:
+            return
         self.view = view
+        self.l_section.configure(text=view)
         self._fill_groups()
         self._fill_songs()
 
