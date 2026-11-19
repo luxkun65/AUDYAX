@@ -122,3 +122,16 @@ def test_entries_are_copies():
     q.set(original)
     q.current["title"] = "cambiado"
     assert original[0]["title"] == "a"
+
+
+def test_peek_next_looks_ahead_without_moving():
+    q = PlayQueue()
+    q.set(songs("a", "b", "c"))
+    assert q.peek_next()["id"] == "b" and q.peek_next(1)["id"] == "c" and q.peek_next(2) is None
+    assert q.current["id"] == "a"
+    q.repeat = "all"
+    assert q.peek_next(2)["id"] == "a"
+    q.repeat = "one"
+    assert q.peek_next(5)["id"] == "a"
+    assert q.advance()["id"] == "a"
+    assert PlayQueue().peek_next() is None

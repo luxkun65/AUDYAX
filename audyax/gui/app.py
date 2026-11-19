@@ -556,7 +556,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "notifications", "keep_in_background", "speed_limit_enabled", "speed_limit_mb",
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
-                "library_folder", "shuffle", "repeat")},
+                "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
+                "auto_lyrics")},
             "watched": self.watched,
         }
 

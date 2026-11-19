@@ -104,6 +104,32 @@ class PlayQueue:
             return None
         return self.current
 
+    def position_after(self, position: int, auto: bool = True):
+        """The position that follows `position` (same rules as next()), or None."""
+        if not self.items:
+            return None
+        if auto and self.repeat == "one" and 0 <= position < len(self.items):
+            return position
+        if position + 1 < len(self.items):
+            return position + 1
+        if self.repeat in ("all", "one"):
+            return 0
+        return None
+
+    def peek_next(self, ahead: int = 0):
+        """The song that will sound after the current one and `ahead` more (for gapless
+        playback, which prepares songs in advance). Moves nothing."""
+        pos = self.index
+        for _ in range(ahead + 1):
+            pos = self.position_after(pos, auto=True)
+            if pos is None:
+                return None
+        return self.items[pos]
+
+    def advance(self):
+        """The prepared song started sounding: same as next(auto=True)."""
+        return self.next(auto=True)
+
     def previous(self):
         if not self.items:
             return None

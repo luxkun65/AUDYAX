@@ -163,6 +163,24 @@ def save_lyrics(audio_path, lyric: dict, mode: str) -> list:
     return done
 
 
+def fetch_and_save(audio_path, title: str, artist: str, album: str = "", duration=None,
+                   mode: str = "lrc", proxy: str = "") -> str:
+    """Looks for the lyrics of a song that has none and saves them. With mode "off" they are
+    saved as .lrc anyway (the user asked for them; the song file isn't touched).
+    Returns "ok", "none" (not found) or "error" (no connection…)."""
+    try:
+        found = find_lyrics(title or Path(audio_path).stem, artist or "", album or "", duration, proxy=proxy)
+    except Exception:
+        return "error"
+    if not found:
+        return "none"
+    try:
+        saved = save_lyrics(audio_path, found, "lrc" if mode == "off" else mode)
+    except Exception:
+        return "error"
+    return "ok" if saved else "none"
+
+
 # ==============================================================================
 # READING (for the player)
 # ==============================================================================

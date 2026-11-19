@@ -9,6 +9,7 @@ Together they are the base of the project's "part 2" (a full music player).
 """
 
 import threading
+import time
 from pathlib import Path
 
 try:
@@ -62,6 +63,14 @@ def _draw(name: str, color: str, n: int = 64) -> "Image.Image":
         d.line([p(.08, .72), p(.3, .72), p(.62, .28), p(.8, .28)], fill=color, width=w, joint="curve")
         d.polygon([p(.78, .14), p(.96, .28), p(.78, .42)], fill=color)
         d.polygon([p(.78, .58), p(.96, .72), p(.78, .86)], fill=color)
+    elif name == "moon":
+        d.ellipse([p(.14, .14), p(.86, .86)], fill=color)
+        d.ellipse([p(.36, .02), p(1.02, .7)], fill=(0, 0, 0, 0))
+    elif name == "sound":     # equalizer sliders
+        w = max(2, n // 12)
+        for x, knob in ((.22, .62), (.5, .32), (.78, .52)):
+            d.line([p(x, .12), p(x, .88)], fill=color, width=w)
+            d.ellipse([p(x - .1, knob - .1), p(x + .1, knob + .1)], fill=color)
     elif name == "close":
         w = max(2, n // 10)
         d.line([p(.25, .25), p(.75, .75)], fill=color, width=w)
@@ -90,22 +99,31 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                neighbor(), and the shuffle and repeat buttons appear;
       on_modes_change(shuffle, repeat) -> optional, to remember the shuffle/repeat buttons;
       cover_loader(item) -> optional, gives the cover of an item that doesn't bring one;
-      on_open() -> optional, called when the cover or the title is clicked.
+      on_open() -> optional, called when the cover or the title is clicked;
+      on_sound() -> optional, shows a "Sonido" button (equalizer, transitions) that calls it.
+    With a queue, the next song is prepared in advance and follows without a gap (or with
+    the engine's crossfade). The sleep timer (sleep_in / sleep_after_song) stops the music.
     An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
                  volume=0.8, engine=None, on_track_change=None, queue=None, on_modes_change=None,
-                 cover_loader=None, on_open=None):
+                 cover_loader=None, on_open=None, on_sound=None):
         super().__init__(master, fg_color=colors["card"], corner_radius=14, border_width=1,
                          border_color=colors.get("border", colors["card"]))
         self.colors, self.fonts = colors, fonts
         self.neighbor, self.on_volume_change, self.on_close = neighbor, on_volume_change, on_close
         self.on_track_change = on_track_change
         self.queue, self.on_modes_change, self.cover_loader = queue, on_modes_change, cover_loader
-        self.on_open = on_open
+        self.on_open, self.on_sound = on_open, on_sound
         self._end_pending = threading.Event()
+        self._advanced = threading.Event()      # the prepared next song started (audio thread)
         self.engine = engine or AudioEngine(on_finish=self._end_pending.set)
         self.engine.volume = volume
+        if queue is not None:
+            self.engine.peek_next = self._peek_next
+            self.engine.on_advance = self._on_engine_advance
+        self.sleep_deadline = None              # time.monotonic() when the music stops, or None
+        self.sleep_after_song = False           # stop when the current song ends
         self.item = None
         self._lines = []
         self._dragging = False
@@ -174,7 +192,14 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                                        button_hover_color=c["accent_hover"])
         self.s_volume.set(self.engine.volume)
         self.s_volume.pack(side="left")
-        self._button(self, "close", self.close, 12).grid(row=0, column=5, rowspan=2, padx=(4, 10))
+        extra = ctk.CTkFrame(self, fg_color="transparent")
+        extra.grid(row=0, column=6, rowspan=2, padx=(2, 0))
+        if self.on_sound:
+            self._button(extra, "sound", self.on_sound, 14).pack(side="left")
+        self.btn_sleep = self._button(extra, "moon", self._sleep_menu, 14)
+        self.btn_sleep.pack(side="left")
+        self.l_sleep = ctk.CTkLabel(extra, text="", font=f["small"], text_color=c["accent"])
+        self._button(self, "close", self.close, 12).grid(row=0, column=7, rowspan=2, padx=(4, 10))
 
     # ---------------------------------------------------------------- actions
     def play(self, item: dict):
@@ -184,14 +209,19 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             raise RuntimeError(reason)
         if not item.get("path") or not Path(item["path"]).exists():
             raise RuntimeError("el archivo ya no está en su carpeta")
+        self._end_pending.clear()
+        self._advanced.clear()
+        self.engine.play(item["path"])
+        self._show(item)
+
+    def _show(self, item: dict):
+        """Shows `item` as the song playing (title, cover, lyrics…) without touching the audio."""
         if item.get("image") is None and self.cover_loader:
             try:   # a copy: the queue doesn't keep a cover in memory for every song
                 item = {**item, "image": self.cover_loader(item)}
             except Exception:
                 pass
         self.item = item
-        self._end_pending.clear()
-        self.engine.play(item["path"])
         self.l_title.configure(text=_short(item.get("title") or Path(item["path"]).stem, 42))
         self._artist = _short(item.get("artist") or "", 42)
         self.l_sub.configure(text=self._artist, text_color=self.colors["muted"])
@@ -211,6 +241,85 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                 self._lines = lyrics.parse_lrc(lyrics.read_lyrics(self.item["path"]))
             except Exception:
                 pass
+
+    # ---------------------------------------------------------------- gapless (audio thread)
+    def _peek_next(self, ahead: int):
+        if self.sleep_after_song:
+            return None
+        try:
+            item = self.queue.peek_next(ahead)
+        except Exception:
+            return None
+        if item is None or not item.get("path") or not Path(item["path"]).is_file():
+            return None   # a missing file: the song ends and jump() skips it
+        return item["path"]
+
+    def _on_engine_advance(self, path):
+        """The prepared song started sounding. Normally it's the queue's next one; if the queue
+        changed after it was prepared, the queue moves to the song that is actually heard."""
+        try:   # right away (audio thread): the next peek counts from this song
+            q = self.queue
+            expected = q.peek_next(0)
+            if expected is not None and expected.get("path") == path:
+                q.advance()
+            else:
+                later = [k for k in range(q.index + 1, len(q.items)) if q.items[k].get("path") == path]
+                if later:
+                    q.jump(later[0])
+                else:
+                    q.advance()
+        except Exception:
+            pass
+        self._advanced.set()
+
+    # ---------------------------------------------------------------- sleep timer
+    def sleep_in(self, minutes):
+        """Stops (pauses) the music in `minutes`; None cancels the timer."""
+        self.sleep_after_song = False
+        self.sleep_deadline = time.monotonic() + minutes * 60 if minutes else None
+        self._show_sleep()
+
+    def sleep_at_song_end(self):
+        self.sleep_deadline = None
+        self.sleep_after_song = True
+        self._show_sleep()
+
+    def _sleep_menu(self):
+        import tkinter as tk
+        i = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        c = {k: (v[i] if isinstance(v, (tuple, list)) else v) for k, v in self.colors.items()}
+        menu = tk.Menu(self, tearoff=0, bg=c["card"], fg=c["text"], activebackground=c["hover"],
+                       activeforeground=c["text"], relief="flat", borderwidth=1)
+        for minutes in (15, 30, 45, 60, 90):
+            menu.add_command(label=f"Detener en {minutes} min", command=lambda m=minutes: self.sleep_in(m))
+        menu.add_command(label="Detener al terminar la canción", command=self.sleep_at_song_end)
+        if self.sleep_deadline or self.sleep_after_song:
+            menu.add_separator()
+            menu.add_command(label="Cancelar temporizador", command=lambda: self.sleep_in(None))
+        x, y = self.btn_sleep.winfo_rootx(), self.btn_sleep.winfo_rooty()
+        menu.tk_popup(x, y - 10)
+
+    def _show_sleep(self):
+        c = self.colors
+        active = bool(self.sleep_deadline or self.sleep_after_song)
+        self.btn_sleep.configure(image=_icon("moon", c["accent"] if active else c["text"], 14))
+        if self.sleep_after_song:
+            self.l_sleep.configure(text="fin")
+        elif self.sleep_deadline:
+            left = max(0, self.sleep_deadline - time.monotonic())
+            self.l_sleep.configure(text=f"{int(left // 60) + 1} min" if left >= 60 else f"{int(left)} s")
+        if active:
+            self.l_sleep.pack(side="left", padx=(0, 4))
+        else:
+            self.l_sleep.pack_forget()
+
+    def _sleep_now(self):
+        """The timer ran out: pause (it can be resumed) and turn the timer off."""
+        self.sleep_deadline, self.sleep_after_song = None, False
+        if self.engine.status == "playing":
+            self.engine.pause_playback()
+            self.btn_play.configure(image=self.ico_play)
+        self._show_sleep()
 
     def toggle(self):
         if not self.item:
@@ -299,9 +408,23 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                 return
         except Exception:
             return
+        if self._advanced.is_set():      # the prepared song started: show it
+            self._advanced.clear()
+            current = self.queue.current if self.queue is not None else None
+            if current is not None:
+                self._show(current)
         if self._end_pending.is_set():   # the song ended by itself: play the next one
             self._end_pending.clear()
-            self.jump(1, auto=True)
+            if self.sleep_after_song:
+                self._sleep_now()
+                self.btn_play.configure(image=self.ico_play)
+            else:
+                self.jump(1, auto=True)
+        if self.sleep_deadline:
+            if time.monotonic() >= self.sleep_deadline:
+                self._sleep_now()
+            else:
+                self._show_sleep()
         if self.item:
             pos = self.engine.position
             if not self._dragging:
