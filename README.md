@@ -44,6 +44,7 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - **Reproduciendo** (also by clicking the cover or title in the player bar): big cover, the full lyrics (synced ones follow the song, the current line is highlighted and a click on a line jumps there) and the next songs in the queue. If a song has no lyrics, *Buscar letra* finds them on LRCLIB and saves them as the settings say (as an `.lrc` file if lyrics are turned off there, so the song isn't touched).
 - **Playlists** (*Listas*): your own lists, saved as `.m3u8` files in a `Listas` folder inside the music folder, so other players can open them too. Create them with *Nueva lista*, from the queue (*Guardar como lista*) or with right-click → *Añadir a una lista* on any song (songs already in the list are skipped). Right-click a list to play, rename or delete it (only the list is deleted, never the songs); `Supr` removes songs from it. Songs that are no longer in their folder stay in the list, marked as not found.
 - **Sound** (button with sliders in the player bar): a 10-band **equalizer** with presets (Rock, Pop, Graves+, Voz…) that applies while the song plays; **transition between songs**: without a gap (the next song is prepared in advance and starts exactly when the previous one ends) or a **crossfade** of 1–12 s; and **automatic lyrics** (off by default, turned on in that window): when a song without lyrics starts, they're looked up on LRCLIB and saved as the settings say (`.lrc` if lyrics are turned off there).
+- **Appearance** (*Apariencia*, at the bottom of the sidebar): **color schemes** for the whole app (Violeta, Azul, Turquesa, Verde, Ámbar, Rojo, Rosa, Grafito) that apply right away, without restarting; **dynamic colors**: the player bar and *Reproduciendo* take the main color of the cover that's playing; and the **background of *Reproduciendo***: the cover very blurred and darkened (immersive), an image of your own, or plain.
 - **Sleep timer** (moon button in the player bar): stops the music in 15/30/45/60/90 minutes or when the current song ends; the time left is shown next to it.
 - **Play queue**: playing a song (in the library or the download list) queues the table as it's shown; right-click a song (or several selected ones) for *Reproducir a continuación* / *Añadir a la cola*. **Shuffle** and **repeat** (queue / one song) buttons in the player bar, remembered. The **Cola** section shows what was played, what's playing and what's next: double-click jumps to a song, `Supr` removes it, *Vaciar cola* empties what's left. The first scan reads every file; later ones (*Actualizar*, or each time the player is shown) only read new or changed files, using a cache in `~/.audyax_library.json`.
 - **Watched playlists** (*Vigiladas* in the sidebar): save a playlist or album and AUDYAX checks whether it has new songs (on startup, or with *Revisar*) and downloads only those, to the same folder, using `descargados.txt`. After downloading a playlist, AUDYAX offers to watch it. Optionally, new songs can be downloaded automatically (*Configuración → Descargas*).
@@ -126,6 +127,7 @@ audyax/
     lyrics.py                lyrics from LRCLIB, .lrc files, embedded lyrics, LRC parsing
     library.py               player library: folder scan with cache, artists, albums, search, sort
     playlists.py             player playlists (.m3u8 in <music>/Listas): create, read, write, rename, delete
+    colors.py                color schemes, cover color, blurred background (no UI)
     metadata.py              MusicBrainz (album, year) and Cover Art Archive covers
     services.py              circuit breaker for the online services
     system.py                program folder and bundled FFmpeg
@@ -151,6 +153,8 @@ audyax/
     player_view.py           player view (library, playlists, queue) and the logo switch animation
     now_playing.py           player's "Reproduciendo" section: big cover, full lyrics, up next
     sound_window.py          "Sonido" window: equalizer, gapless/crossfade, automatic lyrics
+    appearance_window.py     "Apariencia" window: color scheme, dynamic colors, background
+    theming.py               recolors the open interface when the colors change
     desktop.py               system tray icon and notifications (optional)
     style.py, widgets.py     colors, icons, image helpers, small widgets
 build.py                     builds the program with PyInstaller (with FFmpeg and the icon)

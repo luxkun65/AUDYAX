@@ -29,6 +29,7 @@ C = {
     "on_accent": ("#ffffff", "#1a0b3b"), "hover": ("#e4dbf5", "#35264f"),
     "red": ("#d63c2c", "#e74c3c"),
 }
+BASE_C = dict(C)   # the default (violet) palette; color schemes are made from it
 
 
 STATUS_COLORS = {"green": "#2ecc71", "yellow": "#f1c40f", "red": "#e74c3c"}
@@ -147,6 +148,11 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
     elif name == "artist":   # person: head and shoulders
         d.ellipse(box(.3, .08, .7, .48), fill=color)
         d.chord(box(.1, .56, .9, 1.36), start=180, end=360, fill=color)
+    elif name == "palette":  # painter's palette
+        d.ellipse(box(.06, .1, .94, .9), fill=color)
+        for x, y in ((.3, .34), (.52, .24), (.72, .38), (.28, .58)):
+            d.ellipse(box(x - .07, y - .07, x + .07, y + .07), fill=(0, 0, 0, 0))
+        d.ellipse(box(.56, .56, .8, .8), fill=(0, 0, 0, 0))
     elif name == "playing":  # equalizer bars
         for x, top in ((.12, .5), (.34, .18), (.56, .38), (.78, .08)):
             d.rounded_rectangle(box(x, top, x + .14, .92), radius=max(1, w // 3), fill=color)
@@ -207,6 +213,7 @@ def empty_image(side_px: int) -> ctk.CTkImage:
 def equalizer_image() -> ctk.CTkImage:
     """Sidebar ornament: purple blocks that fade out upwards."""
     width, tall, S = 96, 100, 2
+    rgb = tuple(int(C["accent"][1][i:i + 2], 16) for i in (1, 3, 5))   # follows the color scheme
     im = Image.new("RGBA", (width * S, tall * S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     cell_px, gap = 14 * S, 4 * S
@@ -218,7 +225,7 @@ def equalizer_image() -> ctk.CTkImage:
             alpha = int(255 * (0.9 - 0.7 * r / max(1, h - 1)))
             x = x0 + c * (cell_px + gap)
             y = tall * S - (r + 1) * (cell_px + gap) + gap
-            d.rounded_rectangle((x, y, x + cell_px, y + cell_px), radius=3 * S, fill=(167, 139, 250, alpha))
+            d.rounded_rectangle((x, y, x + cell_px, y + cell_px), radius=3 * S, fill=(*rgb, alpha))
     return ctk.CTkImage(light_image=im, dark_image=im, size=(width, tall))
 
 

@@ -75,6 +75,10 @@ SHORTCUTS = [("Ctrl+V", "Pegar un enlace copiado y descargarlo"),
 class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, ctk.CTk, *_DND_BASES):
     def __init__(self):
         self.cfg = load_config()
+        if self.cfg.get("color_scheme", "Violeta") != "Violeta":   # before any widget takes a color
+            from audyax.core.colors import scheme_palette
+            from audyax.gui.style import BASE_C
+            C.update(scheme_palette(BASE_C, self.cfg["color_scheme"]))
         self.theme = "light" if self.cfg.get("theme") == "light" else "dark"
         ctk.set_appearance_mode(self.theme)
         super().__init__()
@@ -434,12 +438,17 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.nav["downloads"].pack(fill="x")
         self._mark_nav()
 
-        ctk.CTkLabel(sidebar, text="", image=equalizer_image()).pack(side="bottom", pady=(0, 14))
+        self.l_ornament = ctk.CTkLabel(sidebar, text="", image=equalizer_image())
+        self.l_ornament.pack(side="bottom", pady=(0, 14))
         self.sw_theme = ctk.CTkSwitch(sidebar, text="", width=46, progress_color=C["accent"],
                                      command=lambda: self._apply_theme(
                                          "dark" if self.sw_theme.get() else "light"))
         self.sw_theme.pack(side="bottom", pady=(0, 6))
         ctk.CTkLabel(sidebar, text="Modo oscuro", font=self.f_small, text_color=C["muted"]).pack(side="bottom")
+        ctk.CTkButton(sidebar, text="Apariencia", image=icon("palette", 16, C["muted"]), compound="left",
+                      width=92, height=28, corner_radius=10, font=self.f_small, fg_color="transparent",
+                      hover_color=C["hover"], text_color=C["muted"],
+                      command=self._open_appearance).pack(side="bottom", pady=(0, 10))
         if self.theme == "dark":
             self.sw_theme.select()
 
@@ -490,6 +499,43 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self._button(top, "Ver en GitHub", lambda: webbrowser.open(REPO_URL), icon("external", 16),
                     height=34).pack()
         self.after(150, top.focus)
+
+    # ---------------------------------------------------------------- appearance
+    def _open_appearance(self):
+        from audyax.gui.appearance_window import AppearanceWindow
+        w = getattr(self, "appearance_window", None)
+        if w is not None and w.winfo_exists():
+            w.lift()
+            w.focus()
+            return
+        self.appearance_window = AppearanceWindow(self)
+
+    def set_color_scheme(self, name: str):
+        """Recolors the whole app (open windows included) with another scheme."""
+        from audyax.gui import theming
+        if self.cfg.get("color_scheme", "Violeta") == name:
+            return
+        self.cfg["color_scheme"] = name
+        if self.player is not None and getattr(self, "_bar_palette", None):
+            # the bar may have the cover's colors: back to the scheme first, so everything changes together
+            back = theming.color_mapping(self._bar_palette, C)
+            theming.recolor(self.player, back)
+            self.player.colors = {k: back.get(v, v) for k, v in self.player.colors.items()}
+        mapping = theming.apply_scheme(self, name)
+        self._bar_palette = dict(C)
+        self.l_ornament.configure(image=equalizer_image())
+        self._mark_nav()
+        if self.player is not None:
+            self.player.colors = {k: mapping.get(v, v) for k, v in self.player.colors.items()}
+            self.player.refresh_icons()
+            self._apply_dynamic_colors()
+        for view in (self.player_view, self.now_playing):
+            if view is not None:
+                view.apply_theme()
+
+    def _refresh_now_playing_background(self):
+        if self.now_playing is not None:
+            self.now_playing.apply_theme()
 
     def _apply_theme(self, mode: str):
         self.theme = mode
@@ -557,7 +603,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
-                "auto_lyrics")},
+                "auto_lyrics", "color_scheme", "dynamic_colors", "np_background", "background_image")},
             "watched": self.watched,
         }
 

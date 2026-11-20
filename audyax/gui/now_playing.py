@@ -1,15 +1,18 @@
 """AUDYAX player: the "Reproduciendo" section (part 2, section 3). Big cover, the full
 lyrics (synced ones follow the song and a click on a line jumps there) and what's next in
-the queue. It reads the app's player bar and queue; it doesn't play anything by itself."""
+the queue. It reads the app's player bar and queue; it doesn't play anything by itself.
+
+Immersive background (appearance package): the cover very blurred and darkened fills the
+view (or an image of the user's), and panels and text take colors that go with it."""
 
 import threading
 import tkinter as tk
 from pathlib import Path
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageTk
 
-from audyax.core import lyrics
+from audyax.core import colors, lyrics
 from audyax.core.library import NO_ARTIST
 from audyax.gui.player_view import load_cover
 
@@ -28,19 +31,28 @@ class NowPlayingView(ctk.CTkFrame):
         self._cover_img = None
         self._searching = False
         self._visible = False
+        self._cover_src = None      # PIL cover of the song shown (for the background)
+        self.surface = None         # colors over the immersive background, or None (normal)
+        self._bg_key = None
+        self._bg_photo = None
+        self._bg_job = None
 
+        # background image: under everything else
+        self.bg_label = tk.Label(self, bd=0, highlightthickness=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self._build_left()
         self._build_lyrics()
         self._apply_text_style()
+        self.bind("<Configure>", lambda _e: self._background_later())
         self.after(200, self._tick)
 
     # ---------------------------------------------------------------- building
     def _build_left(self):
         C, app = self.C, self.app
-        left = ctk.CTkFrame(self, fg_color="transparent", width=COVER_PX)
-        left.grid(row=0, column=0, sticky="ns", padx=(0, 22))
+        left = ctk.CTkFrame(self, fg_color="transparent", width=COVER_PX, corner_radius=16)
+        left.grid(row=0, column=0, sticky="ns", padx=(14, 18), pady=14)
+        self.left = left
         self.l_cover = ctk.CTkLabel(left, text="", width=COVER_PX, height=COVER_PX, fg_color=C["card"],
                                     corner_radius=18)
         self.l_cover.pack(pady=(4, 14))
@@ -53,19 +65,22 @@ class NowPlayingView(ctk.CTkFrame):
         self.l_album = ctk.CTkLabel(left, text="", font=app.f_normal, text_color=C["muted"], anchor="w",
                                     justify="left", wraplength=COVER_PX)
         self.l_album.pack(fill="x", pady=(2, 16))
-        ctk.CTkLabel(left, text="A continuación", font=app.f_bold, anchor="w").pack(fill="x")
+        self.l_next_title = ctk.CTkLabel(left, text="A continuación", font=app.f_bold, anchor="w")
+        self.l_next_title.pack(fill="x")
         self.up_next = ctk.CTkFrame(left, fg_color="transparent")
         self.up_next.pack(fill="x", pady=(4, 0))
 
     def _build_lyrics(self):
         C, app = self.C, self.app
         box = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=14, border_width=1, border_color=C["border"])
-        box.grid(row=0, column=1, sticky="nsew")
+        box.grid(row=0, column=1, sticky="nsew", padx=(0, 14), pady=14)
+        self.box = box
         box.grid_columnconfigure(0, weight=1)
         box.grid_rowconfigure(1, weight=1)
         head = ctk.CTkFrame(box, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 4))
-        ctk.CTkLabel(head, text="Letra", font=app.f_detail).pack(side="left")
+        self.l_head = ctk.CTkLabel(head, text="Letra", font=app.f_detail)
+        self.l_head.pack(side="left")
         self.l_kind = ctk.CTkLabel(head, text="", font=app.f_small, text_color=C["muted"])
         self.l_kind.pack(side="left", padx=10)
         self.btn_find = app._button(head, "Buscar letra", self._find_lyrics, height=30)
@@ -75,27 +90,112 @@ class NowPlayingView(ctk.CTkFrame):
         self.text.configure(state="disabled")
         self.l_empty = ctk.CTkLabel(box, text="", font=app.f_normal, text_color=C["muted"], justify="center")
 
-    def _apply_text_style(self):
+    def _col(self, key):
+        """A color of the view: the immersive one if there's a background, else the theme's."""
+        if self.surface is not None:
+            return self.surface[key]
         C = self.C
-        i = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        return {"bg": "transparent", "left": "transparent", "panel": C["card"], "border": C["border"],
+                "hover": C["hover"], "text": C["text"], "muted": C["muted"], "accent": C["accent"],
+                "cover": C["card"]}[key]
+
+    def _plain(self, key) -> str:
+        """The color as one "#rrggbb" for the current light/dark mode (tk text tags need it)."""
+        value = self._col(key)
+        if isinstance(value, (tuple, list)):
+            return value[1 if ctk.get_appearance_mode() == "Dark" else 0]
+        return value
+
+    def _apply_text_style(self):
         family = self.app.f_normal.cget("family")
         t = self.text._textbox
-        t.tag_configure("line", font=(family, 14), foreground=C["muted"][i], spacing1=4, spacing3=4,
+        t.tag_configure("line", font=(family, 14), foreground=self._plain("muted"), spacing1=4, spacing3=4,
                         justify="center")
-        t.tag_configure("plain", font=(family, 14), foreground=C["text"][i], spacing1=3, spacing3=3,
+        t.tag_configure("plain", font=(family, 14), foreground=self._plain("text"), spacing1=3, spacing3=3,
                         justify="center")
-        t.tag_configure("current", font=(family, 19, "bold"), foreground=C["accent"][i])
-        t.tag_configure("past", foreground=C["text"][i])
+        t.tag_configure("current", font=(family, 19, "bold"), foreground=self._plain("accent"))
+        t.tag_configure("past", foreground=self._plain("text"))
         t.tag_raise("current")
 
-    def apply_theme(self):
+    def _apply_surface(self):
+        """Paints panels and text with the colors of the current background (or the theme's)."""
+        self.configure(fg_color=self._col("bg"))
+        self.left.configure(fg_color=self._col("left"))
+        self.l_cover.configure(fg_color=self._col("cover"))
+        self.l_title.configure(text_color=self._col("text"))
+        self.l_artist.configure(text_color=self._col("accent"))
+        self.l_album.configure(text_color=self._col("muted"))
+        self.l_next_title.configure(text_color=self._col("text"))
+        self.box.configure(fg_color=self._col("panel"), border_color=self._col("border"))
+        self.l_head.configure(text_color=self._col("text"))
+        for label in (self.l_kind, self.l_empty):
+            label.configure(text_color=self._col("muted"))
+        self.text.configure(scrollbar_button_color=self._col("border"),
+                            scrollbar_button_hover_color=self._col("muted"))
         self._apply_text_style()
         self._show_up_next()
+
+    def apply_theme(self):
+        self._bg_key = None
+        self._render_background()
+        self._apply_surface()
+
+    # ---------------------------------------------------------------- immersive background
+    def _background_source(self):
+        """(image, blur, dim) for the background, or None for the normal look."""
+        cfg = self.app.cfg
+        mode = cfg.get("np_background", "cover")
+        if mode == "image" and cfg.get("background_image"):
+            try:
+                return Image.open(cfg["background_image"]), 6, 0.5
+            except OSError:
+                return None
+        if mode == "cover" and self._cover_src is not None:
+            return self._cover_src, 40, 0.42
+        return None
+
+    def _background_later(self):
+        if self._bg_job:
+            self.after_cancel(self._bg_job)
+        self._bg_job = self.after(150, self._render_background)
+
+    def _render_background(self):
+        self._bg_job = None
+        if not self._visible:
+            return
+        src = self._background_source()
+        w, h = self.winfo_width(), self.winfo_height()
+        key = (id(src[0]) if src else None, self.app.cfg.get("np_background"), self.app.cfg.get("background_image"),
+               self.app.cfg.get("dynamic_colors"), w, h, tuple(self.C["accent"]))
+        if key == self._bg_key:
+            return
+        self._bg_key = key
+        if src is None or w < 50 or h < 50:
+            self.bg_label.place_forget()
+            if self.surface is not None:
+                self.surface = None
+                self._apply_surface()
+            return
+        image, blur, dim = src
+        bg = colors.blurred_background(image, (w, h), blur=blur, dim=dim)
+        self._bg_photo = ImageTk.PhotoImage(bg, master=self)
+        self.bg_label.configure(image=self._bg_photo)
+        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bg_label.lower()
+        mean = colors.mean_color(bg)
+        hue = colors.cover_hue(self._cover_src) if self.app.cfg.get("dynamic_colors") else None
+        accent = colors.readable_accent(hue) if hue is not None else self.C["accent"][1]
+        self.surface = {"bg": mean, "left": mean, "panel": colors.lighten(mean, 0.06),
+                        "border": colors.lighten(mean, 0.16), "hover": colors.lighten(mean, 0.14),
+                        "cover": colors.lighten(mean, 0.08), "text": "#f6f3fb", "muted": "#c9c1d9",
+                        "accent": accent}
+        self._apply_surface()
 
     # ---------------------------------------------------------------- shown / hidden
     def on_show(self):
         self._visible = True
         self._load_song(force=True)
+        self._background_later()
 
     def on_hide(self):
         self._visible = False
@@ -127,6 +227,7 @@ class NowPlayingView(ctk.CTkFrame):
             self._set_cover(None)
             self._set_lyrics("")
             self._show_up_next()
+            self._render_background()
             return
         self.l_title.configure(text=item.get("title") or Path(path).stem)
         self.l_artist.configure(text=item.get("artist") or NO_ARTIST)
@@ -135,8 +236,10 @@ class NowPlayingView(ctk.CTkFrame):
         self._set_cover(item.get("image") or load_cover(path))
         self._set_lyrics(lyrics.read_lyrics(path))
         self._show_up_next()
+        self._render_background()
 
     def _set_cover(self, image):
+        self._cover_src = image
         if image is None:
             from audyax.gui.style import logo
             self.l_cover.configure(image=logo(COVER_PX // 2))
@@ -249,11 +352,11 @@ class NowPlayingView(ctk.CTkFrame):
         upcoming = q.upcoming()[:UP_NEXT] if self._playing_item() else []
         if not upcoming:
             ctk.CTkLabel(self.up_next, text="Nada más en la cola", font=self.app.f_small,
-                         text_color=self.C["muted"], anchor="w").pack(fill="x")
+                         text_color=self._col("muted"), anchor="w").pack(fill="x")
             return
         for k, item in enumerate(upcoming):
             row = ctk.CTkButton(self.up_next, anchor="w", height=30, corner_radius=8, fg_color="transparent",
-                                hover_color=self.C["hover"], text_color=self.C["text"], font=self.app.f_small,
+                                hover_color=self._col("hover"), text_color=self._col("text"), font=self.app.f_small,
                                 text=_short(f"{item.get('title') or Path(item['path']).stem}  ·  "
                                             f"{item.get('artist') or NO_ARTIST}", 48),
                                 command=lambda pos=q.index + 1 + k: self.app._queue_jump(pos))
@@ -261,7 +364,7 @@ class NowPlayingView(ctk.CTkFrame):
         rest = len(q.upcoming()) - len(upcoming)
         if rest > 0:
             ctk.CTkLabel(self.up_next, text=f"y {rest} más en la cola", font=self.app.f_small,
-                         text_color=self.C["muted"], anchor="w").pack(fill="x", padx=12)
+                         text_color=self._col("muted"), anchor="w").pack(fill="x", padx=12)
 
     # ---------------------------------------------------------------- refresh
     def _tick(self):

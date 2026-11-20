@@ -160,7 +160,29 @@ class PlayerMixin:
         if self.now_playing is not None:
             self.now_playing.lyrics_found(path)
 
+    # ---------------------------------------------------------------- dynamic colors
+    def _apply_dynamic_colors(self, from_settings: bool = False):
+        """The player bar takes the hue of the cover playing (or goes back to the scheme)."""
+        if self.player is None:
+            return
+        from audyax.core import colors
+        from audyax.gui import theming
+        hue = None
+        if self.cfg.get("dynamic_colors") and self.player.item:
+            hue = colors.cover_hue(self.player.item.get("image"))
+        new = theming.palette_for(hue)
+        old = getattr(self, "_bar_palette", None) or dict(C)
+        mapping = theming.color_mapping(old, new)
+        if mapping:
+            theming.recolor(self.player, mapping)
+            self.player.colors = {k: mapping.get(v, v) for k, v in self.player.colors.items()}
+            self.player.refresh_icons()
+        self._bar_palette = new
+        if from_settings and self.now_playing is not None:
+            self.now_playing.apply_theme()   # on a song change it updates by itself
+
     def _on_track_change(self, item):
+        self._apply_dynamic_colors()
         self._auto_lyrics(item)
         if self.player_view is not None:
             self.player_view.mark_playing(item["path"] if item.get("source") == "library" else None)

@@ -133,10 +133,12 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
     # ---------------------------------------------------------------- building
     def _button(self, parent, name, command, size=18, accent=False):
         c = self.colors
-        return ctk.CTkButton(parent, text="", width=size + 18, height=size + 14, corner_radius=(size + 14) // 2,
+        button = ctk.CTkButton(parent, text="", width=size + 18, height=size + 14, corner_radius=(size + 14) // 2,
                              image=_icon(name, c["on_accent"] if accent else c["text"], size),
                              fg_color=c["accent"] if accent else "transparent",
                              hover_color=c["accent_hover"] if accent else c["hover"], command=command)
+        self.__dict__.setdefault("_icon_buttons", []).append((button, name, size, accent))
+        return button
 
     def _build(self):
         c, f = self.colors, self.fonts
@@ -186,7 +188,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
 
         vol = ctk.CTkFrame(self, fg_color="transparent")
         vol.grid(row=0, column=4, rowspan=2, padx=6)
-        ctk.CTkLabel(vol, text="", image=_icon("volume", c["muted"], 16)).pack(side="left", padx=(0, 4))
+        self.l_volume_icon = ctk.CTkLabel(vol, text="", image=_icon("volume", c["muted"], 16))
+        self.l_volume_icon.pack(side="left", padx=(0, 4))
         self.s_volume = ctk.CTkSlider(vol, from_=0, to=1, width=90, height=16, command=self._change_volume,
                                        progress_color=c["accent"], button_color=c["accent"],
                                        button_hover_color=c["accent_hover"])
@@ -319,6 +322,22 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         if self.engine.status == "playing":
             self.engine.pause_playback()
             self.btn_play.configure(image=self.ico_play)
+        self._show_sleep()
+
+    def refresh_icons(self):
+        """Draws the icons again with self.colors (after a color change)."""
+        c = self.colors
+        for button, name, size, accent in getattr(self, "_icon_buttons", []):
+            try:
+                button.configure(image=_icon(name, c["on_accent"] if accent else c["text"], size))
+            except Exception:
+                pass
+        self.ico_play = _icon("play", c["on_accent"], 18)
+        self.ico_pause = _icon("pause", c["on_accent"], 18)
+        self.btn_play.configure(image=self.ico_pause if self.engine.status == "playing" else self.ico_play)
+        self.l_volume_icon.configure(image=_icon("volume", c["muted"], 16))
+        if self.queue is not None:
+            self._show_modes()
         self._show_sleep()
 
     def toggle(self):
