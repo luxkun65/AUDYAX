@@ -99,8 +99,9 @@ class PlayerMixin:
             on_volume_change=lambda v: self.cfg.__setitem__("volume", round(v, 2)),
             on_close=self._on_player_closed, on_track_change=self._on_track_change,
             on_modes_change=self._on_modes_change, cover_loader=lambda item: load_cover(item["path"]),
-            on_open=self._open_now_playing,
+            on_open=self._open_now_playing, on_sound=self._open_sound,
             volume=float(self.cfg.get("volume", 0.8)))
+        self._apply_sound_settings()
 
     def _play_item(self, item: dict):
         """Plays one song. The bar sits below both views (downloader and player), so the
@@ -113,7 +114,54 @@ class PlayerMixin:
             return
         self.player.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(0, 12))
 
+    # ---------------------------------------------------------------- sound settings
+    def _apply_sound_settings(self):
+        """Equalizer and transition between songs, from the settings, to the engine."""
+        if self.player is None:
+            return
+        engine = self.player.engine
+        engine.crossfade = float(self.cfg.get("crossfade", 0) or 0)
+        engine.set_equalizer(self.cfg.get("eq_gains") if self.cfg.get("eq_enabled") else None)
+
+    def _open_sound(self):
+        from audyax.gui.sound_window import SoundWindow
+        w = getattr(self, "sound_window", None)
+        if w is not None and w.winfo_exists():
+            w.lift()
+            w.focus()
+            return
+        self.sound_window = SoundWindow(self)
+
+    # ---------------------------------------------------------------- automatic lyrics
+    def _auto_lyrics(self, item):
+        """A song without lyrics starts: look them up in the background (once per session)."""
+        path = item.get("path")
+        tried = self.__dict__.setdefault("_lyrics_tried", set())
+        if not path or path in tried or not self.cfg.get("auto_lyrics", False):
+            return
+        tried.add(path)
+        import threading
+        from audyax.core import lyrics
+        if lyrics.read_lyrics(path):
+            return
+        title, artist, album = item.get("title") or "", item.get("artist") or "", item.get("album") or ""
+        duration = self.player.engine.duration if self.player is not None else None
+        mode, proxy = self.cfg.get("lyrics", "off"), self.cfg.get("proxy", "")
+
+        def work():
+            result = lyrics.fetch_and_save(path, title, artist, album, duration or None, mode, proxy)
+            if result == "ok":
+                self.after(0, lambda: self._lyrics_found(path))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _lyrics_found(self, path):
+        if self.player is not None and self.player.item and self.player.item["path"] == path:
+            self.player.reload_lyrics()
+        if self.now_playing is not None:
+            self.now_playing.lyrics_found(path)
+
     def _on_track_change(self, item):
+        self._auto_lyrics(item)
         if self.player_view is not None:
             self.player_view.mark_playing(item["path"] if item.get("source") == "library" else None)
         if self.now_playing is not None:

@@ -214,20 +214,19 @@ class NowPlayingView(ctk.CTkFrame):
         self._searching = True
         self.btn_find.configure(state="disabled", text="Buscando…")
         path, mode = item["path"], self.app.cfg.get("lyrics", "off")
-        mode = "lrc" if mode == "off" else mode
         proxy = self.app.cfg.get("proxy", "")
         duration = self.app.player.engine.duration or None
 
         def work():
-            try:
-                found = lyrics.find_lyrics(item.get("title") or Path(path).stem, item.get("artist") or "",
-                                           item.get("album") or "", duration, proxy=proxy)
-                saved = lyrics.save_lyrics(path, found, mode) if found else []
-                result = "ok" if saved else "none"
-            except Exception:
-                result = "error"
+            result = lyrics.fetch_and_save(path, item.get("title") or "", item.get("artist") or "",
+                                           item.get("album") or "", duration, mode, proxy)
             self.after(0, lambda: self._found(path, result))
         threading.Thread(target=work, daemon=True).start()
+
+    def lyrics_found(self, path):
+        """The automatic search found the lyrics of `path`."""
+        if path == self.path and self._visible:
+            self._set_lyrics(lyrics.read_lyrics(path))
 
     def _found(self, path, result):
         self._searching = False

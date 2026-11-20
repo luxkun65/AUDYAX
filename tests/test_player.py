@@ -128,7 +128,7 @@ def test_volume(engine, tmp_path):
 def test_stop_does_not_count_as_end(engine, tmp_path):
     engine.play(make_audio(tmp_path / "t.mp3", seconds=4))
     time.sleep(0.1)
-    process = engine._process
+    process = engine._decoders[0].process
     engine.stop()
     assert engine.status == "stopped" and not engine.end.is_set()
     assert process.poll() is not None  # FFmpeg closed
@@ -161,3 +161,136 @@ def test_audio_available_when_portaudio_fails(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     ok, reason = player_engine.audio_available()
     assert not ok and "no se pudo iniciar el audio" in reason
+
+
+# ------------------------------------------------------------------ equalizer
+def test_eq_filter():
+    assert player_engine.eq_filter(None) == ""
+    assert player_engine.eq_filter([0] * 10) == ""
+    f = player_engine.eq_filter([6, 0, 0, 0, 0, 0, 0, 0, 0, -20])
+    assert f.startswith("volume=-6.0dB,equalizer=f=31:t=o:w=1:g=6.0,")   # headroom for the boost
+    assert "f=16000:t=o:w=1:g=-12.0" in f                                 # limited to ±12 dB
+    assert "f=62" not in f and f.endswith("alimiter=limit=0.97:level=false")
+    assert player_engine.eq_filter([-3] * 10).startswith("equalizer=")    # only cuts: no headroom
+    assert all(len(g) == len(player_engine.EQ_BANDS) for g in player_engine.EQ_PRESETS.values())
+
+
+def _band_energy(data: bytes, freq: float) -> float:
+    samples = np.frombuffer(bytes(data), dtype=np.int16).astype(np.float32)[::2]
+    spectrum = np.abs(np.fft.rfft(samples))
+    freqs = np.fft.rfftfreq(len(samples), 1 / player_engine.SAMPLE_RATE)
+    return float(spectrum[(freqs > freq * 0.8) & (freqs < freq * 1.2)].sum())
+
+
+@needs_ffmpeg
+def test_equalizer_changes_the_sound(engine, tmp_path):
+    song = tmp_path / "t.wav"
+    import subprocess
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=100:duration=3",
+                    "-f", "lavfi", "-i", "sine=frequency=8000:duration=3", "-filter_complex", "amix=inputs=2",
+                    str(song)], check=True)
+    engine.play(song)
+    assert engine.end.wait(10)
+    flat = FakeOutput.instances[-1].played
+    engine.end.clear()
+    engine.set_equalizer(player_engine.EQ_PRESETS["Graves+"])     # stopped: just remembered
+    assert engine.equalizer == list(player_engine.EQ_PRESETS["Graves+"])
+    engine.play(song)
+    assert engine.end.wait(10)
+    bass = FakeOutput.instances[-1].played
+    ratio_flat = _band_energy(flat, 100) / _band_energy(flat, 8000)
+    ratio_bass = _band_energy(bass, 100) / _band_energy(bass, 8000)
+    assert ratio_bass > ratio_flat * 1.5
+
+
+@needs_ffmpeg
+def test_changing_the_equalizer_keeps_the_position(engine, tmp_path):
+    engine.play(make_audio(tmp_path / "t.mp3", seconds=6))
+    time.sleep(0.2)
+    before = engine.position
+    engine.set_equalizer([3] * 10)
+    assert engine.status == "playing" and engine.position >= before - 0.05
+    engine.set_equalizer([3] * 10)            # same sound: doesn't restart
+    assert len(FakeOutput.instances) == 2
+
+
+# ------------------------------------------------------------------ gapless / crossfade
+def _tone(path, freq, seconds):
+    import subprocess
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    f"sine=frequency={freq}:duration={seconds}", str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_gapless_continues_with_the_next_song(engine, tmp_path):
+    a, b = _tone(tmp_path / "a.wav", 440, 1), _tone(tmp_path / "b.wav", 880, 1)
+    advanced = []
+    # the queue "a, b": after a (ahead=0 while a sounds) comes b; after b, nothing
+    engine.peek_next = lambda ahead: str(b) if ahead == 0 and not advanced else None
+    engine.on_advance = advanced.append
+    engine.play(a)
+    assert engine.end.wait(10)
+    assert advanced == [str(b)] and engine.path == str(b)
+    assert len(FakeOutput.instances) == 1                     # one output: no gap between them
+    played = np.frombuffer(bytes(FakeOutput.instances[0].played), dtype=np.int16)[::2]
+    total = len(played) / player_engine.SAMPLE_RATE
+    assert 1.9 < total < 2.3
+    # no silence where they meet (the tone is continuous across the boundary)
+    middle = played[int(0.9 * player_engine.SAMPLE_RATE):int(1.1 * player_engine.SAMPLE_RATE)]
+    window = player_engine.SAMPLE_RATE // 100
+    quietest = min(np.abs(middle[i:i + window].astype(np.float32)).mean()
+                   for i in range(0, len(middle) - window, window))
+    assert quietest > 1000
+
+
+@needs_ffmpeg
+def test_crossfade_mixes_the_end_and_the_start(engine, tmp_path):
+    a, b = _tone(tmp_path / "a.wav", 440, 3), _tone(tmp_path / "b.wav", 880, 3)
+    advanced = []
+    engine.crossfade = 1.0
+    engine.peek_next = lambda ahead: str(b) if ahead == 0 and not advanced else None
+    engine.on_advance = advanced.append
+    engine.play(a)
+    assert engine.end.wait(15)
+    played = np.frombuffer(bytes(FakeOutput.instances[0].played), dtype=np.int16)
+    total = len(played) / 2 / player_engine.SAMPLE_RATE
+    assert 4.7 < total < 5.3                  # 3 + 3 - 1 s overlapped
+    sr = player_engine.SAMPLE_RATE
+    during = bytes(played[int(2.3 * sr) * 2:int(2.7 * sr) * 2])
+    assert _band_energy(during, 440) > 0 and _band_energy(during, 880) > 0   # both at once
+    after = bytes(played[int(3.5 * sr) * 2:int(4.0 * sr) * 2])
+    assert _band_energy(after, 440) < _band_energy(after, 880) / 20          # only the new one
+
+
+@needs_ffmpeg
+def test_no_next_song_ends_normally(engine, tmp_path):
+    engine.peek_next = lambda ahead: None
+    engine.play(_tone(tmp_path / "a.wav", 440, 1))
+    assert engine.end.wait(10) and engine.status == "stopped"
+
+
+@needs_ffmpeg
+def test_repeat_one_gapless(engine, tmp_path):
+    a = _tone(tmp_path / "a.wav", 440, 1)
+    plays, peeks = [], []
+
+    def peek(ahead):     # repeat "one", twice: a, a, a
+        peeks.append(ahead)
+        return str(a) if len(peeks) <= 2 else None
+    engine.peek_next = peek
+    engine.on_advance = plays.append
+    engine.play(a)
+    assert engine.end.wait(10)
+    assert plays == [str(a), str(a)]
+
+
+def test_mix_fades_out_and_in():
+    one = (np.ones(400, dtype=np.int16) * 10000).tobytes()       # 200 frames
+    out = np.frombuffer(player_engine.mix(one, one, 0, 200), dtype=np.int16)[::2]
+    assert abs(int(out[0]) - 10000) < 50 and abs(int(out[-1]) - 10000) < 200   # equal power
+    silent = bytes(len(one))
+    fade_out = np.frombuffer(player_engine.mix(one, silent, 0, 200), dtype=np.int16)[::2]
+    assert fade_out[0] > 9900 and fade_out[-1] < 200
+    short = np.frombuffer(player_engine.mix(one, one[:100], 0, 200), dtype=np.int16)
+    assert len(short) == 400                                     # the shorter one is padded
