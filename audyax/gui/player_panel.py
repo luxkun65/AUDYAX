@@ -328,10 +328,7 @@ class PlayerMixin:
         if on == getattr(self, "_np_fullscreen", False):
             return
         self._np_fullscreen = on
-        try:
-            self.attributes("-fullscreen", on)
-        except Exception:
-            pass
+        self._fill_monitor(on)
         if on:
             self.sidebar.grid_remove()
             if not getattr(self, "_esc_bound", False):
@@ -341,6 +338,45 @@ class PlayerMixin:
             self.sidebar.grid()
         if self.now_playing is not None:
             self.now_playing.fullscreen_changed(on)
+
+    def _fill_monitor(self, on: bool):
+        """Full screen on the monitor the window is on. On Windows Tk's "-fullscreen" always
+        goes to the main monitor, so there the window is made borderless and stretched over
+        its own monitor; elsewhere Tk's full screen already stays on the current monitor."""
+        import tkinter as tk
+        from audyax.gui.desktop import monitor_rect
+        if on:
+            rect = monitor_rect(self)
+            if rect is None:
+                try:
+                    self.attributes("-fullscreen", True)
+                except Exception:
+                    pass
+                return
+            # remember how it was, to leave it the same way
+            self._before_full = (self.state(), tk.Tk.wm_geometry(self))
+            if self.state() == "zoomed":
+                self.state("normal")
+            x, y, w, h = rect
+            self.overrideredirect(True)
+            tk.Tk.wm_geometry(self, f"{w}x{h}+{x}+{y}")     # Tk's own geometry: real pixels, no scaling
+            self.lift()
+            self.focus_force()
+        else:
+            before = getattr(self, "_before_full", None)
+            self._before_full = None
+            if before is None:
+                try:
+                    self.attributes("-fullscreen", False)
+                except Exception:
+                    pass
+                return
+            state, geometry = before
+            self.overrideredirect(False)
+            tk.Tk.wm_geometry(self, geometry)
+            if state == "zoomed":
+                self.state("zoomed")
+            self.focus_force()
 
     def _player_section(self, section: str):
         """A section of the player's sidebar."""

@@ -47,18 +47,18 @@ def _compute(layout, w, h, has_next):
                 "next": None, "lyrics": None,
                 "fonts": {"title": 24, "artist": 16, "album": 12, "lyric": 14, "current": 19, "small": 10}}
     if layout == "cover":
-        size = max(140, min(inner_h - 110, int((w - 2 * PAD - GAP) * 0.62)))
+        size = max(140, min(inner_h - 140, int((w - 2 * PAD - GAP) * 0.62)))
         lyrics_x0 = PAD + size + GAP
         lyrics = (lyrics_x0, TOP, w - PAD, h - PAD) if w - PAD - lyrics_x0 >= 160 else None
         return {"cover": (PAD, TOP, size), "info": (PAD, TOP + size + 16, size, "nw"),
                 "next": None, "lyrics": lyrics,
                 "fonts": {"title": 22, "artist": 15, "album": 11, "lyric": 12, "current": 15, "small": 10}}
     # balanced
-    size = max(120, min(inner_h - (230 if has_next else 110), int(w * 0.32), 380))
+    size = max(120, min(inner_h - (250 if has_next else 140), int(w * 0.32), 380))
     lyrics_x0 = PAD + size + GAP
     lyrics = (lyrics_x0, TOP, w - PAD, h - PAD) if w - PAD - lyrics_x0 >= 200 else None
     info_y = TOP + size + 16
-    next_y = info_y + 100
+    next_y = info_y + 120
     rows = max(0, (h - PAD - next_y - 26) // 30)
     return {"cover": (PAD, TOP, size), "info": (PAD, info_y, size, "nw"),
             "next": (PAD, next_y, size, min(5, rows)) if has_next and rows > 0 else None,

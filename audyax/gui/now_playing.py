@@ -10,6 +10,7 @@ phone. They act on the app's player bar and queue; this view doesn't play anythi
 
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 
 import customtkinter as ctk
@@ -19,6 +20,7 @@ from audyax.core import colors, lyrics
 from audyax.core.library import NO_ARTIST
 from audyax.gui import np_layout
 from audyax.gui.player_view import load_cover
+from audyax.player.bar import _fit, tk_text
 
 UP_NEXT = 5
 LIGHT_TEXT, LIGHT_MUTED = "#f6f3fb", "#cfc8dc"
@@ -43,6 +45,49 @@ def _square(img):
     side = min(img.size)   # square crop (YouTube thumbnails are 16:9)
     return img.crop(((img.width - side) // 2, (img.height - side) // 2,
                      (img.width + side) // 2, (img.height + side) // 2))
+
+
+def _clamp_lines(cv, item, text, max_lines):
+    """Shortens a wrapped canvas text with "…" until it takes at most `max_lines` lines."""
+    font = tkfont.Font(font=cv.itemcget(item, "font"))
+    limit = font.metrics("linespace") * max_lines + 2
+
+    def height():
+        box = cv.bbox(item)
+        return (box[3] - box[1]) if box else 0
+    if height() <= limit:
+        return
+    lo, hi = 1, len(text)
+    while lo < hi:                       # longest beginning that still fits
+        mid = (lo + hi + 1) // 2
+        cv.itemconfigure(item, text=text[:mid].rstrip() + "…")
+        if height() <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    cv.itemconfigure(item, text=text[:lo].rstrip() + "…")
+
+
+def background_for(app, cover, w, h):
+    """(PIL image of w × h, on_image) with the background chosen in Apariencia: the blurred
+    cover, your own image, or the plain app color (on_image=False). Shared by "Reproduciendo"
+    and the mini player, so both always look the same."""
+    from audyax.gui.style import C
+    cfg = app.cfg
+    mode = cfg.get("np_background", "cover")
+    src = None
+    if mode == "image" and cfg.get("background_image"):
+        try:
+            src = (Image.open(cfg["background_image"]), 0, 0.62)   # your picture, sharp
+        except OSError:
+            src = None
+    elif mode == "cover" and cover is not None:
+        src = (cover, 40, 0.42)
+    if src is None:
+        i = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        return Image.new("RGB", (max(1, w), max(1, h)), C["bg"][i]), False
+    image, blur, dim = src
+    return colors.blurred_background(image, (w, h), blur=blur, dim=dim), True
 
 
 class NowPlayingView(ctk.CTkFrame):
@@ -155,22 +200,7 @@ class NowPlayingView(ctk.CTkFrame):
 
     # ---------------------------------------------------------------- colors and background
     def _background(self, w, h):
-        """(PIL image of w × h, on_image) — on_image=False for the plain app color."""
-        cfg = self.app.cfg
-        mode = cfg.get("np_background", "cover")
-        src = None
-        if mode == "image" and cfg.get("background_image"):
-            try:
-                src = (Image.open(cfg["background_image"]), 0, 0.62)   # your picture, sharp
-            except OSError:
-                src = None
-        elif mode == "cover" and self._cover_src is not None:
-            src = (self._cover_src, 40, 0.42)
-        if src is None:
-            i = 1 if ctk.get_appearance_mode() == "Dark" else 0
-            return Image.new("RGB", (w, h), self.C["bg"][i]), False
-        image, blur, dim = src
-        return colors.blurred_background(image, (w, h), blur=blur, dim=dim), True
+        return background_for(self.app, self._cover_src, w, h)
 
     def _palette(self, on_image: bool) -> dict:
         """Text colors: light on images (they're darkened), the theme's on the plain color.
@@ -239,40 +269,51 @@ class NowPlayingView(ctk.CTkFrame):
         ix, iy, iw, anchor = r["info"]
         justify = "center" if anchor == "n" else "left"
         if self.item:
-            title = self.item.get("title") or Path(self.path).stem
-            artist = self.item.get("artist") or NO_ARTIST
-            album = " · ".join(str(v) for v in (self.item.get("album"), self.item.get("year")) if v)
+            title = tk_text(self.item.get("title") or Path(self.path).stem)
+            artist = tk_text(self.item.get("artist") or NO_ARTIST)
+            album = tk_text(" · ".join(str(v) for v in (self.item.get("album"), self.item.get("year")) if v))
         else:
             title, artist = "Nada sonando", ""
             album = "Reproduce algo desde Canciones, Artistas, Álbumes o tus listas."
         t1 = cv.create_text(ix, iy, text=title, anchor=anchor, width=iw, justify=justify, fill=col["text"],
                             font=(family, f["title"], "bold"))
+        _clamp_lines(cv, t1, title, max_lines=2)          # a very long title never reaches the controls
         y_next = cv.bbox(t1)[3] + 4
         if artist:
             t2 = cv.create_text(ix, y_next, text=artist, anchor=anchor, width=iw, justify=justify,
                                 fill=col["accent"], font=(family, f["artist"]))
+            _clamp_lines(cv, t2, artist, max_lines=1)
             y_next = cv.bbox(t2)[3] + 2
         if album:
-            cv.create_text(ix, y_next, text=album, anchor=anchor, width=iw, justify=justify, fill=col["muted"],
-                           font=(family, f["album"]))
+            t3 = cv.create_text(ix, y_next, text=album, anchor=anchor, width=iw, justify=justify,
+                                fill=col["muted"], font=(family, f["album"]))
+            _clamp_lines(cv, t3, album, max_lines=2 if not self.item else 1)
+            y_next = cv.bbox(t3)[3]
 
-        # up next
+        # up next: it starts below where the song data really ends (a long title takes
+        # several lines) and shows only the rows that fit above the controls
         if r["next"] and upcoming:
             nx, ny, nw, rows = r["next"]
-            cv.create_text(nx, ny, text="A continuación", anchor="nw", fill=col["text"],
-                           font=(family, f["small"] + 2, "bold"))
+            ny = max(ny, y_next + 22)
+            rows = min(rows, max(0, (r["controls"][1] - 12 - (ny + 26)) // 28))
+            if rows:
+                cv.create_text(nx, ny, text="A continuación", anchor="nw", fill=col["text"],
+                               font=(family, f["small"] + 2, "bold"))
+            line_font = tkfont.Font(family=family, size=f["small"] + 1)
             for k, item in enumerate(upcoming[:rows]):
                 tag = f"next{k}"
                 label = f"{item.get('title') or Path(item['path']).stem}  ·  {item.get('artist') or NO_ARTIST}"
-                cv.create_text(nx + 2, ny + 26 + k * 30, text=_short(label, 46), anchor="nw", width=nw,
-                               fill=col["muted"], font=(family, f["small"] + 1), tags=(tag,))
+                cv.create_text(nx + 2, ny + 26 + k * 28, text=_fit(label, line_font, nw - 4), anchor="nw",
+                               fill=col["muted"], font=line_font, tags=(tag,))
                 cv.tag_bind(tag, "<Button-1>", lambda _e, pos=q.index + 1 + k: self.app._queue_jump(pos))
                 cv.tag_bind(tag, "<Enter>", lambda _e, t=tag: (cv.itemconfigure(t, fill=col["text"]),
                                                               cv.configure(cursor="hand2")))
                 cv.tag_bind(tag, "<Leave>", lambda _e, t=tag: (cv.itemconfigure(t, fill=col["muted"]),
                                                               cv.configure(cursor="")))
 
-        # layout buttons (top right)
+        # layout buttons (top right); their rounded corners take the color under them
+        under = bg.crop((max(0, w - np_layout.PAD - 520), 10, w - np_layout.PAD, 54))
+        self.controls.configure(bg_color=colors.mean_color(under))
         cv.create_window(w - np_layout.PAD, 10, window=self.controls, anchor="ne")
 
         # playback controls (instead of the player bar)
@@ -335,6 +376,28 @@ class NowPlayingView(ctk.CTkFrame):
             self._bind_button("ctl_shuffle", bar.toggle_shuffle)
             self._bind_button("ctl_repeat", bar.cycle_repeat)
 
+        # left: the same extra options as the player bar (sound, mini player, sleep timer)
+        extras = []
+        if bar.on_sound:
+            extras.append(("ctl_sound", "sound", bar.on_sound))
+        if bar.on_mini:
+            extras.append(("ctl_mini", "mini", bar.on_mini))
+        extras.append(("ctl_sleep", "moon", lambda: bar._sleep_menu(
+            at=(cv.winfo_rootx() + int(ids["moon_x"]), cv.winfo_rooty() + by - 20))))
+        if x1 - x0 > 520:
+            for k, (tag, name, command) in enumerate(extras):
+                ex = x0 + 12 + k * 40
+                if name == "moon":
+                    ids["moon_x"] = ex
+                    self._moon_icons = {on: self._icon_photo("moon", col["accent"] if on else col["text"], 18)
+                                        for on in (False, True)}
+                    ids["moon"] = cv.create_image(ex, by, image=self._moon_icons[False], tags=(tag,))
+                    ids["sleep_text"] = cv.create_text(ex + 14, by, anchor="w", text="", fill=col["accent"],
+                                                       font=(family, 9))
+                else:
+                    cv.create_image(ex, by, image=self._icon_photo(name, col["text"], 18), tags=(tag,))
+                self._bind_button(tag, command)
+
         # volume (right) — hidden if the window is too narrow
         if x1 - x0 > 560:
             vx1 = x1
@@ -390,6 +453,10 @@ class NowPlayingView(ctk.CTkFrame):
             cv.itemconfigure(ids["shuffle"], image=self._mode_icons[("shuffle", "on" if q.shuffle else "off")])
             name = "repeat_one" if q.repeat == "one" else "repeat"
             cv.itemconfigure(ids["repeat"], image=self._mode_icons[(name, "on" if q.repeat != "off" else "off")])
+        if "moon" in ids:
+            active = bool(bar.sleep_deadline or bar.sleep_after_song)
+            cv.itemconfigure(ids["moon"], image=self._moon_icons[active])
+            cv.itemconfigure(ids["sleep_text"], text=bar.l_sleep.cget("text") if active else "")
         if "vol_fill" in ids:
             vx = ids["vx0"] + (ids["vx1"] - ids["vx0"]) * engine.volume
             vy = cv.coords(ids["vol_track"])[1]
@@ -452,7 +519,7 @@ class NowPlayingView(ctk.CTkFrame):
                 self.btn_find.place(x=lw // 2, y=lh // 2 + 16, anchor="center")
             return
         for i, (_sec, line) in enumerate(self._lines):
-            item = lyr.create_text(lw // 2, 0, text=(line or "♪") if self._synced else line, width=lw - 48,
+            item = lyr.create_text(lw // 2, 0, text=tk_text(line or "♪") if self._synced else tk_text(line), width=lw - 48,
                                    justify="center", anchor="n", fill=col["muted"] if self._synced else col["text"],
                                    font=(family, f["lyric"]), tags=("line", f"l{i}"))
             self._line_items.append(item)

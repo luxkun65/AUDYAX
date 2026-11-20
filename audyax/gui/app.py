@@ -533,6 +533,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _refresh_now_playing_background(self):
         if self.now_playing is not None:
             self.now_playing.apply_theme()
+        if getattr(self, "mini_player", None) is not None:
+            self.mini_player.refresh()
 
     def _apply_theme(self, mode: str):
         self.theme = mode

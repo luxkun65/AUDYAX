@@ -215,3 +215,32 @@ def batch_summary(downloaded: int, errors: int, skipped: int = 0) -> str:
     if errors:
         parts.append(f"{errors} con error")
     return " · ".join(parts) or "No se descargó ninguna canción"
+
+
+def monitor_rect(window):
+    """(x, y, width, height) in screen pixels of the monitor where `window` is, on Windows;
+    None elsewhere (or if it can't be found). Tk's own full screen always uses the main
+    monitor on Windows, so AUDYAX uses this to fill the monitor the window is on."""
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+        user32 = ctypes.windll.user32
+        user32.MonitorFromWindow.restype = wintypes.HANDLE
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+        monitor = user32.MonitorFromWindow(hwnd, 2)          # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return None
+        r = info.rcMonitor
+        return r.left, r.top, r.right - r.left, r.bottom - r.top
+    except Exception:
+        return None

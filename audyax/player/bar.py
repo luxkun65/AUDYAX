@@ -90,7 +90,11 @@ def _icon(name: str, colors, size: int):
                         size=(size, size))
 
 
-INFO_WIDTH = 250   # px for the title and the artist
+INFO_WIDTH = 180   # px for the title and the artist (long ones scroll, like on a phone)
+NARROW_BAR = 1000  # below this width (px) the volume slider hides
+PROGRESS_MIN = 220  # px the progress bar always keeps, even in a narrow window
+MARQUEE_MS = 140    # speed of the scrolling text
+MARQUEE_PAUSE = 14  # ticks it stays still at the start of each loop
 
 
 def _fit(text: str, font, width: int = INFO_WIDTH) -> str:
@@ -163,7 +167,7 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
 
     def _build(self):
         c, f = self.colors, self.fonts
-        self.grid_columnconfigure(3, weight=1)   # only the progress bar stretches
+        self.grid_columnconfigure(3, weight=1, minsize=PROGRESS_MIN)   # only the progress bar stretches
         self.l_cover = ctk.CTkLabel(self, text="", width=48, height=48, fg_color=c["hover"], corner_radius=8)
         self.l_cover.grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=10)
         # title and artist in a box of fixed width: the buttons don't move when the song
@@ -222,12 +226,23 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                                        button_hover_color=c["accent_hover"])
         self.s_volume.set(self.engine.volume)
         self.s_volume.pack(side="left")
-        extra = ctk.CTkFrame(self, fg_color="transparent")
+        # narrow window: the volume slider hides so the progress bar keeps its room;
+        # a click on the speaker mutes / unmutes
+        self.l_volume_icon.configure(cursor="hand2")
+        self.l_volume_icon.bind("<Button-1>", lambda _e: self._toggle_mute())
+        self._hidden = {}
+        self.bind("<Configure>", self._on_resize, add="+")
+        extra = self._extra = ctk.CTkFrame(self, fg_color="transparent")
         extra.grid(row=0, column=6, rowspan=2, padx=(2, 0))
+        self._optional = []          # hidden when the window is narrow (they're in "Reproduciendo" too)
         if self.on_sound:
-            self._button(extra, "sound", self.on_sound, 14).pack(side="left")
+            self.btn_sound = self._button(extra, "sound", self.on_sound, 14)
+            self.btn_sound.pack(side="left")
+            self._optional.append(self.btn_sound)
         if self.on_mini:
-            self._button(extra, "mini", self.on_mini, 14).pack(side="left")
+            self.btn_mini = self._button(extra, "mini", self.on_mini, 14)
+            self.btn_mini.pack(side="left")
+            self._optional.append(self.btn_mini)
         self.btn_sleep = self._button(extra, "moon", self._sleep_menu, 14)
         self.btn_sleep.pack(side="left")
         self.l_sleep = ctk.CTkLabel(extra, text="", font=f["small"], text_color=c["accent"])
@@ -255,9 +270,10 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
                 pass
         self.item = item
         room = int(INFO_WIDTH * ctk.ScalingTracker.get_widget_scaling(self)) - 4   # real pixels of the box
-        self.l_title.configure(text=_fit(item.get("title") or Path(item["path"]).stem, self.fonts["bold"], room))
-        self._artist = _fit(item.get("artist") or "", self.fonts["small"], room)
-        self.l_sub.configure(text=self._artist, text_color=self.colors["muted"])
+        self._marquee_set(self.l_title, item.get("title") or Path(item["path"]).stem, self.fonts["bold"], room)
+        self._artist = item.get("artist") or ""
+        self._marquee_set(self.l_sub, self._artist, self.fonts["small"], room)
+        self.l_sub.configure(text_color=self.colors["muted"])
         self.l_total.configure(text=_format_time(self.engine.duration))
         self.bar.configure(to=max(1.0, self.engine.duration))
         self._set_cover(item.get("image"))
@@ -265,6 +281,41 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.btn_play.configure(image=self.ico_pause)
         if self.on_track_change:
             self.on_track_change(item)
+
+    # ---------------------------------------------------------------- scrolling text
+    def _marquee_set(self, label, text, font, room):
+        """Shows `text` in `label`; if it doesn't fit it scrolls sideways (with a pause at the
+        start of each loop) instead of being cut."""
+        text = _short(text, 300)
+        marquee = self.__dict__.setdefault("_marquee", {})
+        marquee[label] = {"text": text, "font": font, "room": room, "pos": 0, "wait": MARQUEE_PAUSE}
+        label.configure(text=_clip(text, font, room))
+        if not getattr(self, "_marquee_running", False):
+            self._marquee_running = True
+            self.after(MARQUEE_MS, self._marquee_tick)
+
+    def _marquee_tick(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        for label, m in self.__dict__.get("_marquee", {}).items():
+            text, font, room = m["text"], m["font"], m["room"]
+            try:
+                if font.measure(text) <= room:
+                    continue
+            except Exception:
+                continue
+            if m["wait"] > 0:
+                m["wait"] -= 1
+                continue
+            loop = text + "      "
+            m["pos"] = (m["pos"] + 1) % len(loop)
+            if m["pos"] == 0:
+                m["wait"] = MARQUEE_PAUSE
+            label.configure(text=_clip(loop[m["pos"]:] + loop[:m["pos"]], font, room))
+        self.after(MARQUEE_MS, self._marquee_tick)
 
     def reload_lyrics(self):
         """Reads the song's lyrics again (e.g. after they were just found and saved)."""
@@ -317,7 +368,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         self.sleep_after_song = True
         self._show_sleep()
 
-    def _sleep_menu(self):
+    def _sleep_menu(self, at=None):
+        """Sleep timer options; `at` = (x, y) on the screen where the menu opens."""
         import tkinter as tk
         i = 1 if ctk.get_appearance_mode() == "Dark" else 0
         c = {k: (v[i] if isinstance(v, (tuple, list)) else v) for k, v in self.colors.items()}
@@ -329,8 +381,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         if self.sleep_deadline or self.sleep_after_song:
             menu.add_separator()
             menu.add_command(label="Cancelar temporizador", command=lambda: self.sleep_in(None))
-        x, y = self.btn_sleep.winfo_rootx(), self.btn_sleep.winfo_rooty()
-        menu.tk_popup(x, y - 10)
+        x, y = at or (self.btn_sleep.winfo_rootx(), self.btn_sleep.winfo_rooty() - 10)
+        menu.tk_popup(x, y)
 
     def _show_sleep(self):
         c = self.colors
@@ -372,6 +424,43 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             button.configure(fg_color=c["accent"] if accent else "transparent",
                              hover_color=c["accent_hover"] if accent else c["hover"])
         self.refresh_icons()
+
+    def _on_resize(self, _event=None):
+        """Narrow window: the progress bar keeps its room; volume slider, shuffle, repeat,
+        sound, mini player and sleep timer hide (they're also in "Reproduciendo")."""
+        wide = self.winfo_width() >= int(NARROW_BAR * ctk.ScalingTracker.get_widget_scaling(self))
+        if wide == getattr(self, "_wide", True):
+            return
+        self._wide = wide
+        widgets = [self.s_volume, self.btn_sleep] + self._optional
+        if self.queue is not None:
+            widgets += [self.btn_shuffle, self.btn_repeat]
+        for w in widgets:
+            if wide:
+                info, before = self._hidden.pop(w, (None, None))
+                if info is not None:
+                    options = {k: v for k, v in info.items() if k != "in"}
+                    if before is not None and before.winfo_manager() == "pack":
+                        options["before"] = before
+                    w.pack(**options)
+            elif w.winfo_manager() == "pack":
+                siblings = w.master.pack_slaves()
+                after = siblings[siblings.index(w) + 1:] if w in siblings else []
+                self.__dict__.setdefault("_hidden", {})[w] = (w.pack_info(), after[0] if after else None)
+                w.pack_forget()
+        if wide:
+            self._extra.grid()
+            self._show_sleep()
+        else:
+            self._extra.grid_remove()     # an empty frame keeps its width: take it out too
+
+    def _toggle_mute(self):
+        if self.engine.volume > 0:
+            self._before_mute = self.engine.volume
+            self._change_volume(0.0)
+        else:
+            self._change_volume(getattr(self, "_before_mute", 0.8) or 0.8)
+        self.s_volume.set(self.engine.volume)
 
     def refresh_icons(self):
         """Draws the icons again with self.colors (after a color change)."""
@@ -505,6 +594,37 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         super().destroy()
 
 
+def tk_text(text) -> str:
+    """Text that Tk can draw. "Decorative" letters (𝓣𝓲𝓽𝓪𝓷, 𝗕𝗼𝗹𝗱, ｆｕｌｌｗｉｄｔｈ…) become normal
+    ones; what's left outside the basic plane (emojis) is removed, since Tk shows it as boxes."""
+    import unicodedata
+    out = []
+    for ch in str(text or ""):
+        if ord(ch) > 0xFFFF or 0xFF01 <= ord(ch) <= 0xFF5E:
+            ch = unicodedata.normalize("NFKC", ch)
+            if any(ord(c) > 0xFFFF for c in ch):
+                continue
+        out.append(ch)
+    return " ".join("".join(out).split()) if out else ""
+
+
 def _short(text: str, n: int) -> str:
-    text = "".join(c if ord(c) <= 0xFFFF else "□" for c in str(text or ""))  # Tk doesn't show emojis
+    text = tk_text(text)
     return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def _clip(text: str, font, width: int) -> str:
+    """The start of `text` that fits in `width` pixels (no "…": used by the scrolling text)."""
+    try:
+        if font.measure(text) <= width:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if font.measure(text[:mid]) <= width:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo]
+    except Exception:
+        return text[:30]
