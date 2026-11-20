@@ -21,8 +21,12 @@ try:
 except ImportError:  # the animation helpers can be imported (and tested) without a UI
     ctk = None
 
-from audyax.core import library, playlists, tags
+from audyax.core import history, library, playlists, tags
 from audyax.core.library import format_duration
+
+SMART_LISTS = {"smart:most": "Más escuchadas", "smart:recent": "Escuchadas recientemente",
+               "smart:added": "Añadidas recientemente"}
+SMART_SIZE = 50
 
 VIEWS = ("Canciones", "Artistas", "Álbumes", "Listas", "Cola")
 
@@ -369,6 +373,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             tree.tag_configure("odd", background=C["row_b"][i])
             tree.tag_configure("playing", foreground=C["accent"][i])
             tree.tag_configure("played", foreground=C["muted"][i])
+            tree.tag_configure("smart", foreground=C["accent"][i])
 
     def apply_theme(self):
         self._apply_tree_style()
@@ -524,6 +529,12 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         keep_albums = {library.album_key(t) for t in matching} if matching is not None else None
         n = 0
         if self.view == "Listas":
+            for key, name in SMART_LISTS.items():          # automatic lists first
+                n_songs = len(self._smart_tracks(key))
+                iid = g.insert("", "end", text=f"  ★ {name}  ·  {n_songs} {'canción' if n_songs == 1 else 'canciones'}",
+                               tags=("smart",) + (("odd",) if n % 2 else ()))
+                self.group_items[iid] = key
+                n += 1
             for name, path in playlists.list_playlists(self.lib.folder):
                 n_songs = len(playlists.read_playlist(path))
                 iid = g.insert("", "end", text=f"  {name}  ·  {n_songs} {'canción' if n_songs == 1 else 'canciones'}",
@@ -571,10 +582,24 @@ class PlayerView(ctk.CTkFrame if ctk else object):
                 tracks = self.lib.tracks_of_artist(key) if self.view == "Artistas" else self.lib.tracks_of_album(key)
         return library.search(tracks, self.query())
 
+    def _smart_tracks(self, key):
+        """Songs of an automatic list ("smart:most", "smart:recent", "smart:added")."""
+        by_path = {t["path"]: t for t in self.lib.tracks}
+        hist = self.app.history
+        if key == "smart:added":
+            chosen = history.recently_added(self.lib.tracks, SMART_SIZE)
+        elif key == "smart:most":
+            chosen = [by_path[p] for p in hist.most_played(SMART_SIZE, existing=set(by_path))]
+        else:
+            chosen = [by_path[p] for p in hist.recent(SMART_SIZE, existing=set(by_path))]
+        return [{**t, "pos": pos} for pos, t in enumerate(chosen)]
+
     def _playlist_tracks(self, playlist_path):
         """Songs of a playlist in its order; each one knows its position ("pos") so the same
         song can be in it twice. Songs not in the library are read from the file (or shown
         as missing)."""
+        if str(playlist_path).startswith("smart:"):
+            return self._smart_tracks(playlist_path)
         by_path = {t["path"]: t for t in self.lib.tracks}
         out = []
         for pos, path in enumerate(playlists.read_playlist(playlist_path)):
@@ -712,10 +737,53 @@ class PlayerView(ctk.CTkFrame if ctk else object):
             menu.add_command(label="Reproducir", command=lambda: self._play_row(row))
             menu.add_command(label="Reproducir a continuación", command=lambda: app._queue_play_next(items))
             menu.add_command(label="Añadir a la cola", command=lambda: app._queue_add(items))
-            if self.view == "Listas":
+            selected_list = self._selected_playlist()
+            if self.view == "Listas" and selected_list and not selected_list.startswith("smart:"):
                 menu.add_command(label="Quitar de la lista", command=self._remove_from_playlist)
         menu.add_cascade(label="Añadir a una lista", menu=self._playlists_menu(menu, items))
+        if len(items) == 1:
+            self._tools_menu(menu, items[0])
         menu.tk_popup(event.x_root, event.y_root)
+
+    # ---------------------------------------------------------------- tools (one song)
+    def _tools_menu(self, menu, item):
+        path = item["path"]
+        if not Path(path).is_file():
+            return
+        menu.add_separator()
+        url = tags.read_source_url(path)
+        if url:
+            menu.add_command(label="Copiar enlace de YouTube", command=lambda: self._copy_link(url))
+        if Path(path).suffix.lower() in (".mp3", ".m4a", ".mp4", ".opus"):
+            menu.add_command(label="Editar etiquetas…", command=lambda: self._edit_tags(path))
+        menu.add_command(label="Recortar…", command=lambda: self._trim(path, item.get("title")))
+
+    def _copy_link(self, url):
+        self.clipboard_clear()
+        self.clipboard_append(url)
+        self._flash("Enlace copiado")
+
+    def _edit_tags(self, path):
+        from audyax.gui.dialogs import TagEditorWindow
+        TagEditorWindow(self.app, None, path, on_saved=self._tags_saved)
+
+    def _tags_saved(self, old_path, new_path, data):
+        """The library reads the file again (only it: the rest is in the cache)."""
+        self._flash("Etiquetas guardadas")
+        bar = self.app.player
+        if bar is not None and bar.item and bar.item["path"] == old_path:
+            bar._show({**bar.item, "path": new_path, "id": new_path,
+                       "title": data.get("title") or bar.item.get("title"),
+                       "artist": data.get("artist") or "", "album": data.get("album") or "", "image": None})
+        self.rescan()
+
+    def _trim(self, path, title):
+        from audyax.gui.trim_window import TrimWindow
+
+        def done(out):
+            self._flash(f"Recorte guardado: {Path(out).name}")
+            self.rescan()
+        TrimWindow(self.app, path, title or "", on_done=done)
 
     # ---------------------------------------------------------------- playlists
     def _playlists_menu(self, parent, items):
@@ -778,7 +846,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
     def _remove_from_playlist(self):
         path = self._selected_playlist()
         rows = set(self.songs.selection())
-        if not path or not rows:
+        if not path or not rows or path.startswith("smart:"):
             return
         keep = [t for t in self._playlist_tracks(path) if f"#{t['pos']}" not in rows]
         try:
@@ -801,6 +869,11 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         menu.add_command(label="Reproducir", command=lambda: self._play_index(0))
         menu.add_command(label="Añadir a la cola",
                          command=lambda: self.app._queue_add([self._item(t) for t in self._playlist_tracks(path)]))
+        if path.startswith("smart:"):
+            menu.add_command(label="Guardar como lista…",
+                             command=lambda: self._new_playlist([self._item(t) for t in self._playlist_tracks(path)]))
+            menu.tk_popup(event.x_root, event.y_root)
+            return
         menu.add_separator()
         menu.add_command(label="Renombrar…", command=lambda: self._rename_playlist(path))
         menu.add_command(label="Eliminar lista", command=lambda: self._delete_playlist(path))

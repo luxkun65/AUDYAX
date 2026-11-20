@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
     "np_background": "cover",        # "Reproduciendo" background: "cover" | "image" | "plain"
     "background_image": "",          # own image for that background
     "np_layout": "balanced",         # "Reproduciendo": balanced | cover | lyrics | no_lyrics
+    "mini_pos": None,                # [x, y] of the mini player on the screen
     # Watched playlists
     "watched": [],                 # [{url, name, folder, last_check, new_count}] (see watched.py)
     "check_watched": True,       # check them when AUDYAX opens

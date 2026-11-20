@@ -45,6 +45,9 @@ The development is primarily based on Python, using `yt-dlp` as the extraction a
 - **Playlists** (*Listas*): your own lists, saved as `.m3u8` files in a `Listas` folder inside the music folder, so other players can open them too. Create them with *Nueva lista*, from the queue (*Guardar como lista*) or with right-click → *Añadir a una lista* on any song (songs already in the list are skipped). Right-click a list to play, rename or delete it (only the list is deleted, never the songs); `Supr` removes songs from it. Songs that are no longer in their folder stay in the list, marked as not found.
 - **Sound** (button with sliders in the player bar): a 10-band **equalizer** with presets (Rock, Pop, Graves+, Voz…) that applies while the song plays; **transition between songs**: a **crossfade** of 1–12 s (2 s by default) or without a gap (the next song is prepared in advance and starts exactly when the previous one ends); and **automatic lyrics** (off by default, turned on in that window): when a song without lyrics starts, they're looked up on LRCLIB and saved as the settings say (`.lrc` if lyrics are turned off there).
 - **Appearance** (*Apariencia*, at the bottom of the sidebar): **color schemes** for the whole app (Violeta, Azul, Turquesa, Verde, Ámbar, Rojo, Rosa, Grafito) that apply right away, without restarting; **dynamic colors**: the player bar and *Reproduciendo* take the main color of the cover that's playing; and the **background of *Reproduciendo***: the cover very blurred and darkened (immersive), an image of your own (shown behind the lyrics and the song data), or plain.
+- **Smart lists** (at the top of *Listas*): *Más escuchadas*, *Escuchadas recientemente* and *Añadidas recientemente* (50 songs each), from a play history kept in `~/.audyax_history.json` (a song counts once it has been heard for 30 s, or half of it if it's shorter). Right-click → *Guardar como lista* turns one into a normal playlist.
+- **Tools on any song of the library** (right-click): *Copiar enlace de YouTube* (the link is in the tags of the songs AUDYAX downloaded), *Editar etiquetas…* (the same editor as in the downloader) and *Recortar…*: choose the start and end, optional fade in / fade out, listen to the cut and save it as a copy (`Song (recorte).mp3`) or replacing the original; tags and cover are kept.
+- **Mini player** (button in the player bar): a small window always on top with the cover, the song, previous / play-pause / next and the progress; the big window hides until you expand it (button or double click), and it can be dragged anywhere. The **tray icon** menu also has the music controls while a song is loaded.
 - **Sleep timer** (moon button in the player bar): stops the music in 15/30/45/60/90 minutes or when the current song ends; the time left is shown next to it.
 - **Play queue**: playing a song (in the library or the download list) queues the table as it's shown; right-click a song (or several selected ones) for *Reproducir a continuación* / *Añadir a la cola*. **Shuffle** and **repeat** (queue / one song) buttons in the player bar, remembered. The **Cola** section shows what was played, what's playing and what's next: double-click jumps to a song, `Supr` removes it, *Vaciar cola* empties what's left. The first scan reads every file; later ones (*Actualizar*, or each time the player is shown) only read new or changed files, using a cache in `~/.audyax_library.json`.
 - **Watched playlists** (*Vigiladas* in the sidebar): save a playlist or album and AUDYAX checks whether it has new songs (on startup, or with *Revisar*) and downloads only those, to the same folder, using `descargados.txt`. After downloading a playlist, AUDYAX offers to watch it. Optionally, new songs can be downloaded automatically (*Configuración → Descargas*).
@@ -128,6 +131,8 @@ audyax/
     library.py               player library: folder scan with cache, artists, albums, search, sort
     playlists.py             player playlists (.m3u8 in <music>/Listas): create, read, write, rename, delete
     colors.py                color schemes, cover color, blurred background (no UI)
+    history.py               play history for the smart lists (no UI)
+    trim.py                  audio cutter with fades, keeping tags and cover (no UI)
     metadata.py              MusicBrainz (album, year) and Cover Art Archive covers
     services.py              circuit breaker for the online services
     system.py                program folder and bundled FFmpeg
@@ -156,6 +161,8 @@ audyax/
     sound_window.py          "Sonido" window: equalizer, gapless/crossfade, automatic lyrics
     appearance_window.py     "Apariencia" window: color scheme, dynamic colors, background
     theming.py               recolors the open interface when the colors change
+    trim_window.py           "Recortar" window
+    mini_player.py           always-on-top mini player
     desktop.py               system tray icon and notifications (optional)
     style.py, widgets.py     colors, icons, image helpers, small widgets
 build.py                     builds the program with PyInstaller (with FFmpeg and the icon)

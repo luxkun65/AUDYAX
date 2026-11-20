@@ -63,6 +63,10 @@ def _draw(name: str, color: str, n: int = 64) -> "Image.Image":
         d.line([p(.08, .72), p(.3, .72), p(.62, .28), p(.8, .28)], fill=color, width=w, joint="curve")
         d.polygon([p(.78, .14), p(.96, .28), p(.78, .42)], fill=color)
         d.polygon([p(.78, .58), p(.96, .72), p(.78, .86)], fill=color)
+    elif name == "mini":      # small window in the corner of a big one
+        w = max(2, n // 12)
+        d.rounded_rectangle([p(.06, .14), p(.94, .86)], radius=max(2, n // 10), outline=color, width=w)
+        d.rounded_rectangle([p(.5, .5), p(.86, .78)], radius=max(1, n // 16), fill=color)
     elif name == "moon":
         d.ellipse([p(.14, .14), p(.86, .86)], fill=color)
         d.ellipse([p(.36, .02), p(1.02, .7)], fill=(0, 0, 0, 0))
@@ -116,21 +120,22 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
       on_modes_change(shuffle, repeat) -> optional, to remember the shuffle/repeat buttons;
       cover_loader(item) -> optional, gives the cover of an item that doesn't bring one;
       on_open() -> optional, called when the cover or the title is clicked;
-      on_sound() -> optional, shows a "Sonido" button (equalizer, transitions) that calls it.
+      on_sound() -> optional, shows a "Sonido" button (equalizer, transitions) that calls it;
+      on_mini() -> optional, shows a button for the mini player.
     With a queue, the next song is prepared in advance and follows without a gap (or with
     the engine's crossfade). The sleep timer (sleep_in / sleep_after_song) stops the music.
     An "item" is a dict with: id, path, title, artist and, optionally, image (PIL.Image)."""
 
     def __init__(self, master, colors, fonts, neighbor, on_volume_change=None, on_close=None,
                  volume=0.8, engine=None, on_track_change=None, queue=None, on_modes_change=None,
-                 cover_loader=None, on_open=None, on_sound=None):
+                 cover_loader=None, on_open=None, on_sound=None, on_mini=None):
         super().__init__(master, fg_color=colors["card"], corner_radius=14, border_width=1,
                          border_color=colors.get("border", colors["card"]))
         self.colors, self.fonts = colors, fonts
         self.neighbor, self.on_volume_change, self.on_close = neighbor, on_volume_change, on_close
         self.on_track_change = on_track_change
         self.queue, self.on_modes_change, self.cover_loader = queue, on_modes_change, cover_loader
-        self.on_open, self.on_sound = on_open, on_sound
+        self.on_open, self.on_sound, self.on_mini = on_open, on_sound, on_mini
         self._end_pending = threading.Event()
         self._advanced = threading.Event()      # the prepared next song started (audio thread)
         self.engine = engine or AudioEngine(on_finish=self._end_pending.set)
@@ -221,6 +226,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         extra.grid(row=0, column=6, rowspan=2, padx=(2, 0))
         if self.on_sound:
             self._button(extra, "sound", self.on_sound, 14).pack(side="left")
+        if self.on_mini:
+            self._button(extra, "mini", self.on_mini, 14).pack(side="left")
         self.btn_sleep = self._button(extra, "moon", self._sleep_menu, 14)
         self.btn_sleep.pack(side="left")
         self.l_sleep = ctk.CTkLabel(extra, text="", font=f["small"], text_color=c["accent"])

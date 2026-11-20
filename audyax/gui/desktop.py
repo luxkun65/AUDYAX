@@ -56,14 +56,18 @@ def notifications_available() -> bool:
 
 
 class Tray:
-    """AUDYAX icon next to the clock, with a menu: Abrir, Pausar/Reanudar and Salir.
+    """AUDYAX icon next to the clock, with a menu: Abrir, the music controls (while a song is
+    loaded: play/pause, next, previous), Pausar/Reanudar descargas and Salir.
 
     The functions passed in (on_open, on_pause, on_quit) are called from the tray's
     thread, NOT the window's: whoever passes them must forward them to the window
     (AUDYAX puts them in its event queue)."""
 
-    def __init__(self, image, on_open, on_pause, on_quit, is_paused, logo_ico: str = ""):
+    def __init__(self, image, on_open, on_pause, on_quit, is_paused, logo_ico: str = "",
+                 on_media=None, media_state=None):
         self.image = image
+        # music: on_media("play_pause" | "next" | "previous"); media_state() -> (has song, playing)
+        self.on_media, self.media_state = on_media, media_state
         self.logo_ico = logo_ico    # .ico shown big inside Windows notifications
         self.on_open, self.on_pause, self.on_quit = on_open, on_pause, on_quit
         self.is_paused = is_paused
@@ -81,8 +85,19 @@ class Tray:
         with self._lock:
             if self.icon is not None:
                 return True
+            has_song = lambda item: bool(self.media_state and self.media_state()[0])   # noqa: E731
+            media = []
+            if self.on_media:
+                media = [
+                    pystray.MenuItem(lambda item: "Pausar música" if self.media_state()[1] else "Reproducir música",
+                                     lambda *a: self.on_media("play_pause"), visible=has_song),
+                    pystray.MenuItem("Siguiente canción", lambda *a: self.on_media("next"), visible=has_song),
+                    pystray.MenuItem("Canción anterior", lambda *a: self.on_media("previous"), visible=has_song),
+                    pystray.Menu.SEPARATOR,
+                ]
             menu = pystray.Menu(
                 pystray.MenuItem("Abrir AUDYAX", lambda *a: self.on_open(), default=True),
+                *media,
                 pystray.MenuItem(lambda item: "Reanudar descargas" if self.is_paused()
                                  else "Pausar descargas", lambda *a: self.on_pause()),
                 pystray.Menu.SEPARATOR,

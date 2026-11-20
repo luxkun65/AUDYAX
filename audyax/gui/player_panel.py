@@ -99,7 +99,7 @@ class PlayerMixin:
             on_volume_change=lambda v: self.cfg.__setitem__("volume", round(v, 2)),
             on_close=self._on_player_closed, on_track_change=self._on_track_change,
             on_modes_change=self._on_modes_change, cover_loader=lambda item: load_cover(item["path"]),
-            on_open=self._open_now_playing, on_sound=self._open_sound,
+            on_open=self._open_now_playing, on_sound=self._open_sound, on_mini=self._open_mini_player,
             volume=float(self.cfg.get("volume", 0.8)))
         self._apply_sound_settings()
 
@@ -124,6 +124,52 @@ class PlayerMixin:
             self.player.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(0, 12))
         else:
             self.player.grid_remove()
+
+    # ---------------------------------------------------------------- play history
+    def _history_tick(self):
+        """Every 2 s: if a song has been heard long enough, it counts as played (once per play)."""
+        from audyax.core.history import counts_as_played
+        bar = self.player
+        heard = self._heard
+        if bar is not None and bar.item:
+            path = bar.item["path"]
+            if path != heard["path"] or bar.engine.position < 1.0 and heard["seconds"] > 3:
+                heard.update(path=path, seconds=0.0, counted=False)   # another song, or the same one again
+            if bar.engine.status == "playing":
+                heard["seconds"] += 2.0
+            if not heard["counted"] and counts_as_played(heard["seconds"], bar.engine.duration):
+                heard["counted"] = True
+                self.history.record(path)
+        self.after(2000, self._history_tick)
+
+    # ---------------------------------------------------------------- mini player and tray
+    def _open_mini_player(self):
+        """Small always-on-top window; the big one hides until "expand"."""
+        from audyax.gui.mini_player import MiniPlayer
+        if getattr(self, "mini_player", None) is not None and self.mini_player.winfo_exists():
+            return
+        self._set_np_fullscreen(False)
+        self.mini_player = MiniPlayer(self)
+        self.withdraw()
+
+    def _close_mini_player(self):
+        mini = getattr(self, "mini_player", None)
+        self.mini_player = None
+        if mini is not None:
+            try:
+                mini.destroy()
+            except Exception:
+                pass
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _tray_media_state(self):
+        """For the tray menu (called from its thread): (is there a song, is it playing)."""
+        bar = self.player
+        if bar is None or not bar.item:
+            return False, False
+        return True, bar.engine.status == "playing"
 
     # ---------------------------------------------------------------- sound settings
     def _apply_sound_settings(self):
