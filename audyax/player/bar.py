@@ -86,6 +86,22 @@ def _icon(name: str, colors, size: int):
                         size=(size, size))
 
 
+INFO_WIDTH = 250   # px for the title and the artist
+
+
+def _fit(text: str, font, width: int = INFO_WIDTH) -> str:
+    """Cuts `text` with "…" so it fits in `width` pixels with `font` (a CTkFont)."""
+    text = _short(text, 200)
+    try:
+        if font.measure(text) <= width:
+            return text
+        while text and font.measure(text + "…") > width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+    except Exception:
+        return _short(text, 36)
+
+
 class PlayerBar(ctk.CTkFrame if ctk else object):
     """Mini player bar. The window passes it:
       colors: dict with "card", "text", "muted", "accent", "accent_hover", "on_accent", "hover"
@@ -133,21 +149,29 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
     # ---------------------------------------------------------------- building
     def _button(self, parent, name, command, size=18, accent=False):
         c = self.colors
-        return ctk.CTkButton(parent, text="", width=size + 18, height=size + 14, corner_radius=(size + 14) // 2,
+        button = ctk.CTkButton(parent, text="", width=size + 18, height=size + 14, corner_radius=(size + 14) // 2,
                              image=_icon(name, c["on_accent"] if accent else c["text"], size),
                              fg_color=c["accent"] if accent else "transparent",
                              hover_color=c["accent_hover"] if accent else c["hover"], command=command)
+        self.__dict__.setdefault("_icon_buttons", []).append((button, name, size, accent))
+        return button
 
     def _build(self):
         c, f = self.colors, self.fonts
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_columnconfigure(3, weight=2)
+        self.grid_columnconfigure(3, weight=1)   # only the progress bar stretches
         self.l_cover = ctk.CTkLabel(self, text="", width=48, height=48, fg_color=c["hover"], corner_radius=8)
         self.l_cover.grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=10)
-        self.l_title = ctk.CTkLabel(self, text="", font=f["bold"], anchor="w")
-        self.l_title.grid(row=0, column=1, sticky="sw", pady=(10, 0))
-        self.l_sub = ctk.CTkLabel(self, text="", font=f["small"], text_color=c["muted"], anchor="w")
-        self.l_sub.grid(row=1, column=1, sticky="nw", pady=(0, 10))
+        # title and artist in a box of fixed width: the buttons don't move when the song
+        # changes (longer texts are cut with "…")
+        info = ctk.CTkFrame(self, fg_color="transparent", width=INFO_WIDTH, height=48)
+        info.grid(row=0, column=1, rowspan=2, sticky="w", pady=10)
+        info.grid_propagate(False)
+        info.grid_columnconfigure(0, weight=1)
+        self.l_title = ctk.CTkLabel(info, text="", font=f["bold"], anchor="w", width=INFO_WIDTH, height=24)
+        self.l_title.grid(row=0, column=0, sticky="sw")
+        self.l_sub = ctk.CTkLabel(info, text="", font=f["small"], text_color=c["muted"], anchor="w",
+                                  width=INFO_WIDTH, height=20)
+        self.l_sub.grid(row=1, column=0, sticky="nw")
         if self.on_open:
             for w in (self.l_cover, self.l_title, self.l_sub):
                 w.configure(cursor="hand2")
@@ -186,7 +210,8 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
 
         vol = ctk.CTkFrame(self, fg_color="transparent")
         vol.grid(row=0, column=4, rowspan=2, padx=6)
-        ctk.CTkLabel(vol, text="", image=_icon("volume", c["muted"], 16)).pack(side="left", padx=(0, 4))
+        self.l_volume_icon = ctk.CTkLabel(vol, text="", image=_icon("volume", c["muted"], 16))
+        self.l_volume_icon.pack(side="left", padx=(0, 4))
         self.s_volume = ctk.CTkSlider(vol, from_=0, to=1, width=90, height=16, command=self._change_volume,
                                        progress_color=c["accent"], button_color=c["accent"],
                                        button_hover_color=c["accent_hover"])
@@ -222,8 +247,9 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             except Exception:
                 pass
         self.item = item
-        self.l_title.configure(text=_short(item.get("title") or Path(item["path"]).stem, 42))
-        self._artist = _short(item.get("artist") or "", 42)
+        room = int(INFO_WIDTH * ctk.ScalingTracker.get_widget_scaling(self)) - 4   # real pixels of the box
+        self.l_title.configure(text=_fit(item.get("title") or Path(item["path"]).stem, self.fonts["bold"], room))
+        self._artist = _fit(item.get("artist") or "", self.fonts["small"], room)
         self.l_sub.configure(text=self._artist, text_color=self.colors["muted"])
         self.l_total.configure(text=_format_time(self.engine.duration))
         self.bar.configure(to=max(1.0, self.engine.duration))
@@ -319,6 +345,41 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
         if self.engine.status == "playing":
             self.engine.pause_playback()
             self.btn_play.configure(image=self.ico_play)
+        self._show_sleep()
+
+    def set_colors(self, colors: dict):
+        """Paints the whole bar with `colors` (same keys as at creation). Every widget gets its
+        color from the key it uses, so the result never depends on the previous colors."""
+        self.colors = c = {**self.colors, **colors}
+        self.configure(fg_color=c["card"], border_color=c.get("border", c["card"]))
+        self.l_cover.configure(fg_color=c["hover"])
+        self.l_title.configure(text_color=c["text"])
+        self.l_sub.configure(text_color=c["muted"])
+        for label in (self.l_time, self.l_total):
+            label.configure(text_color=c["muted"])
+        self.l_sleep.configure(text_color=c["accent"])
+        for slider in (self.bar, self.s_volume):
+            slider.configure(progress_color=c["accent"], button_color=c["accent"],
+                             button_hover_color=c["accent_hover"])
+        for button, _name, _size, accent in getattr(self, "_icon_buttons", []):
+            button.configure(fg_color=c["accent"] if accent else "transparent",
+                             hover_color=c["accent_hover"] if accent else c["hover"])
+        self.refresh_icons()
+
+    def refresh_icons(self):
+        """Draws the icons again with self.colors (after a color change)."""
+        c = self.colors
+        for button, name, size, accent in getattr(self, "_icon_buttons", []):
+            try:
+                button.configure(image=_icon(name, c["on_accent"] if accent else c["text"], size))
+            except Exception:
+                pass
+        self.ico_play = _icon("play", c["on_accent"], 18)
+        self.ico_pause = _icon("pause", c["on_accent"], 18)
+        self.btn_play.configure(image=self.ico_pause if self.engine.status == "playing" else self.ico_play)
+        self.l_volume_icon.configure(image=_icon("volume", c["muted"], 16))
+        if self.queue is not None:
+            self._show_modes()
         self._show_sleep()
 
     def toggle(self):
@@ -430,10 +491,6 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             if not self._dragging:
                 self.bar.set(min(pos, self.engine.duration or pos))
             self.l_time.configure(text=_format_time(self.bar.get() if self._dragging else pos))
-            if self._lines:
-                i = lyrics.current_line(self._lines, pos)
-                text = self._lines[i][1] if i >= 0 and self._lines[i][1] else "♪"
-                self.l_sub.configure(text=_short(text, 60), text_color=self.colors["accent"])
         self.after(250, self._refresh)
 
     def destroy(self):
