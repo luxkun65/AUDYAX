@@ -15,14 +15,22 @@ DEFAULT_LAYOUT = "balanced"
 PAD = 28          # margin around everything
 TOP = 56          # row at the top for the layout buttons
 GAP = 28          # space between the cover column and the lyrics
+CONTROLS = 104    # strip at the bottom with the playback controls (they replace the player bar here)
 
 
 def compute(layout: str, w: int, h: int, has_next: bool = True) -> dict:
     """Rectangles (x0, y0, x1, y1) and font sizes for a view of w × h pixels.
     Keys: cover (x, y, size), info (x, y, width, anchor "nw"|"n"), next (x, y, width, rows) or
-    None, lyrics (x0, y0, x1, y1) or None, fonts {title, artist, album, lyric, current, small}."""
+    None, lyrics (x0, y0, x1, y1) or None, controls (x0, y0, x1, y1) — the playback controls at
+    the bottom —, fonts {title, artist, album, lyric, current, small}."""
     layout = layout if layout in LAYOUTS else DEFAULT_LAYOUT
-    w, h = max(w, 320), max(h, 240)
+    w, h = max(w, 320), max(h, 240 + CONTROLS)
+    out = _compute(layout, w, h - CONTROLS, has_next)
+    out["controls"] = (PAD, h - CONTROLS, w - PAD, h - 12)
+    return out
+
+
+def _compute(layout, w, h, has_next):
     inner_h = h - TOP - PAD
     if layout == "lyrics":
         size = max(64, min(132, inner_h // 4))

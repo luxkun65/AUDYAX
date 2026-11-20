@@ -9,7 +9,7 @@ def inside(rect, w, h):
     return 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
 
 
-@pytest.mark.parametrize("size", [(820, 520), (1100, 700), (1920, 1080), (640, 420)])
+@pytest.mark.parametrize("size", [(820, 520), (1100, 700), (1920, 1080), (640, 440)])
 @pytest.mark.parametrize("layout", list(L.LAYOUTS))
 def test_everything_fits_and_nothing_overlaps(layout, size):
     w, h = size
@@ -23,6 +23,9 @@ def test_everything_fits_and_nothing_overlaps(layout, size):
         assert lx0 >= cover[2] or ly0 >= cover[3]          # lyrics never on top of the cover
     if layout == "no_lyrics":
         assert r["lyrics"] is None and r["next"] is None
+    controls = r["controls"]                               # playback controls at the bottom
+    assert inside(controls, w, max(h, 240 + L.CONTROLS))
+    assert cover[3] <= controls[1] and (not r["lyrics"] or r["lyrics"][3] <= controls[1])
 
 
 def test_layout_sizes_differ_as_promised():
@@ -40,7 +43,7 @@ def test_unknown_layout_is_balanced_and_next_is_optional():
 
 
 def test_narrow_view_drops_the_lyrics_column():
-    assert L.compute("balanced", 330, 600)["lyrics"] is None
+    assert L.compute("balanced", 330, 700)["lyrics"] is None
 
 
 def test_lyric_scroll_eases_and_arrives():

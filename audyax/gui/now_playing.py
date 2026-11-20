@@ -4,7 +4,9 @@ the song, scroll smoothly and a click on a line jumps there) and what's next in 
 Everything is drawn on a canvas on top of the background (the blurred cover, an image of
 your own, or the plain app color), so the background shows behind the text instead of being
 covered by solid panels. Layouts (np_layout.py): balanced, big cover, big lyrics, no lyrics;
-and full screen. It reads the app's player bar and queue; it doesn't play anything itself."""
+and full screen. Here the player bar hides and its controls (progress, play/pause, previous,
+next, shuffle, repeat, volume) are drawn on the page itself, over the background, like on a
+phone. They act on the app's player bar and queue; this view doesn't play anything itself."""
 
 import threading
 import tkinter as tk
@@ -20,6 +22,12 @@ from audyax.gui.player_view import load_cover
 
 UP_NEXT = 5
 LIGHT_TEXT, LIGHT_MUTED = "#f6f3fb", "#cfc8dc"
+VOLUME_WIDTH = 110
+
+
+def _fmt(seconds) -> str:
+    seconds = max(0, int(seconds or 0))
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 def _rounded(img, radius):
@@ -267,8 +275,156 @@ class NowPlayingView(ctk.CTkFrame):
         # layout buttons (top right)
         cv.create_window(w - np_layout.PAD, 10, window=self.controls, anchor="ne")
 
+        # playback controls (instead of the player bar)
+        self._draw_controls(r["controls"], on_image)
+
         # lyrics
         self._draw_lyrics(r, bg, family)
+
+    # ---------------------------------------------------------------- playback controls
+    def _icon_photo(self, name, color, px):
+        from audyax.player.bar import _draw
+        photo = ImageTk.PhotoImage(_draw(name, color, px * 3).resize((px, px), Image.LANCZOS), master=self)
+        self._photos.append(photo)
+        return photo
+
+    def _draw_controls(self, rect, on_image):
+        """Progress bar with times, and under it shuffle · previous · play/pause · next · repeat,
+        and the volume on the right. Drawn on the canvas, over the background."""
+        cv, col, bar = self.canvas, self._colors, self.app.player
+        self._ctl = None
+        if bar is None or not bar.item:
+            return
+        family = self.app.f_normal.cget("family")
+        x0, y0, x1, y1 = rect
+        line_y = y0 + 16
+        track = "#8a8399" if on_image else col["muted"]
+        ids = {"x0": x0, "x1": x1, "y": line_y}
+        ids["track"] = cv.create_line(x0, line_y, x1, line_y, fill=track, width=4, capstyle="round")
+        ids["fill"] = cv.create_line(x0, line_y, x0, line_y, fill=col["text"], width=4, capstyle="round")
+        ids["knob"] = cv.create_oval(x0 - 7, line_y - 7, x0 + 7, line_y + 7, fill=col["text"], outline="")
+        ids["hit"] = cv.create_rectangle(x0 - 8, line_y - 12, x1 + 8, line_y + 12, outline="", fill="")
+        for item in (ids["track"], ids["fill"], ids["knob"], ids["hit"]):
+            cv.addtag_withtag("prog", item)
+        ids["elapsed"] = cv.create_text(x0, line_y + 14, anchor="nw", fill=col["muted"], text="0:00",
+                                        font=(family, 10))
+        ids["left"] = cv.create_text(x1, line_y + 14, anchor="ne", fill=col["muted"], text="", font=(family, 10))
+        cv.tag_bind("prog", "<Button-1>", self._on_progress_press)
+        cv.tag_bind("prog", "<B1-Motion>", self._on_progress_drag)
+        cv.tag_bind("prog", "<ButtonRelease-1>", self._on_progress_release)
+
+        # buttons
+        cx, by = (x0 + x1) // 2, y0 + 70
+        play_bg = col["text"]
+        play_fg = "#1a1325" if on_image else self._plain_bg()
+        ids["play_circle"] = cv.create_oval(cx - 27, by - 27, cx + 27, by + 27, fill=play_bg, outline="",
+                                            tags=("ctl_play",))
+        self._play_icons = {k: self._icon_photo(k, play_fg, 22) for k in ("play", "pause")}
+        ids["play_icon"] = cv.create_image(cx, by, image=self._play_icons["pause"], tags=("ctl_play",))
+        buttons = (("ctl_prev", "previous", -78, lambda: bar.jump(-1)), ("ctl_next", "next", 78, lambda: bar.jump(1)))
+        for tag, name, dx, command in buttons:
+            cv.create_image(cx + dx, by, image=self._icon_photo(name, col["text"], 22), tags=(tag,))
+            self._bind_button(tag, command)
+        self._bind_button("ctl_play", bar.toggle)
+        if bar.queue is not None:
+            self._mode_icons = {(n, c): self._icon_photo(n, color, 18)
+                                for n in ("shuffle", "repeat", "repeat_one")
+                                for c, color in (("on", col["accent"]), ("off", col["muted"]))}
+            ids["shuffle"] = cv.create_image(cx - 150, by, tags=("ctl_shuffle",))
+            ids["repeat"] = cv.create_image(cx + 150, by, tags=("ctl_repeat",))
+            self._bind_button("ctl_shuffle", bar.toggle_shuffle)
+            self._bind_button("ctl_repeat", bar.cycle_repeat)
+
+        # volume (right) — hidden if the window is too narrow
+        if x1 - x0 > 560:
+            vx1 = x1
+            vx0 = vx1 - VOLUME_WIDTH
+            cv.create_image(vx0 - 18, by, image=self._icon_photo("volume", col["muted"], 16))
+            ids["vol_track"] = cv.create_line(vx0, by, vx1, by, fill=track, width=4, capstyle="round", tags=("vol",))
+            ids["vol_fill"] = cv.create_line(vx0, by, vx0, by, fill=col["text"], width=4, capstyle="round",
+                                             tags=("vol",))
+            ids["vol_knob"] = cv.create_oval(vx0 - 6, by - 6, vx0 + 6, by + 6, fill=col["text"], outline="",
+                                             tags=("vol",))
+            ids["vol_hit"] = cv.create_rectangle(vx0 - 6, by - 12, vx1 + 6, by + 12, outline="", fill="",
+                                                 tags=("vol",))
+            ids["vx0"], ids["vx1"] = vx0, vx1
+            cv.tag_bind("vol", "<Button-1>", self._on_volume)
+            cv.tag_bind("vol", "<B1-Motion>", self._on_volume)
+        self._ctl = ids
+        self._dragging = False
+        self._update_controls()
+
+    def _plain_bg(self):
+        i = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        return self.C["bg"][i]
+
+    def _bind_button(self, tag, command):
+        cv = self.canvas
+
+        def run(_e):
+            command()
+            self._update_controls()
+        cv.tag_bind(tag, "<Button-1>", run)
+        cv.tag_bind(tag, "<Enter>", lambda _e: cv.configure(cursor="hand2"))
+        cv.tag_bind(tag, "<Leave>", lambda _e: cv.configure(cursor=""))
+
+    def _update_controls(self, position=None):
+        """Moves the progress and volume, and shows play/pause, shuffle and repeat as they are."""
+        ids, bar, cv = getattr(self, "_ctl", None), self.app.player, self.canvas
+        if not ids or bar is None or not bar.item:
+            return
+        engine = bar.engine
+        duration = engine.duration or 0
+        pos = engine.position if position is None else position
+        frac = max(0.0, min(1.0, pos / duration)) if duration else 0.0
+        x = ids["x0"] + (ids["x1"] - ids["x0"]) * frac
+        y = ids["y"]
+        cv.coords(ids["fill"], ids["x0"], y, x, y)
+        cv.coords(ids["knob"], x - 7, y - 7, x + 7, y + 7)
+        cv.itemconfigure(ids["elapsed"], text=_fmt(pos))
+        cv.itemconfigure(ids["left"], text=f"-{_fmt(duration - pos)}" if duration else "")
+        playing = engine.status == "playing"
+        cv.itemconfigure(ids["play_icon"], image=self._play_icons["pause" if playing else "play"])
+        if "shuffle" in ids and bar.queue is not None:
+            q = bar.queue
+            cv.itemconfigure(ids["shuffle"], image=self._mode_icons[("shuffle", "on" if q.shuffle else "off")])
+            name = "repeat_one" if q.repeat == "one" else "repeat"
+            cv.itemconfigure(ids["repeat"], image=self._mode_icons[(name, "on" if q.repeat != "off" else "off")])
+        if "vol_fill" in ids:
+            vx = ids["vx0"] + (ids["vx1"] - ids["vx0"]) * engine.volume
+            vy = cv.coords(ids["vol_track"])[1]
+            cv.coords(ids["vol_fill"], ids["vx0"], vy, vx, vy)
+            cv.coords(ids["vol_knob"], vx - 6, vy - 6, vx + 6, vy + 6)
+
+    def _progress_at(self, event):
+        ids, engine = self._ctl, self.app.player.engine
+        frac = (event.x - ids["x0"]) / max(1, ids["x1"] - ids["x0"])
+        return max(0.0, min(1.0, frac)) * (engine.duration or 0)
+
+    def _on_progress_press(self, event):
+        if self._ctl:
+            self._dragging = True
+            self._update_controls(self._progress_at(event))
+
+    def _on_progress_drag(self, event):
+        if self._ctl and self._dragging:
+            self._update_controls(self._progress_at(event))
+
+    def _on_progress_release(self, event):
+        if self._ctl and self._dragging:
+            self._dragging = False
+            self.app.player.engine.seek(self._progress_at(event))
+            self._update_controls()
+
+    def _on_volume(self, event):
+        ids, bar = self._ctl, self.app.player
+        if not ids or "vx0" not in ids:
+            return
+        v = max(0.0, min(1.0, (event.x - ids["vx0"]) / max(1, ids["vx1"] - ids["vx0"])))
+        bar.engine.volume = v
+        bar.s_volume.set(v)
+        self.app.cfg["volume"] = round(v, 2)
+        self._update_controls()
 
     def _draw_lyrics(self, r, bg, family):
         cv, lyr, col = self.canvas, self.lyr, self._colors
@@ -423,8 +579,11 @@ class NowPlayingView(ctk.CTkFrame):
             item = self._playing_item()
             if (item["path"] if item else None) != self.path:
                 self._load_song()
-            elif self._synced and item is not None and self._line_items:
-                self._highlight(lyrics.current_line(self._lines, self.app.player.engine.position))
+            else:
+                if self._synced and item is not None and self._line_items:
+                    self._highlight(lyrics.current_line(self._lines, self.app.player.engine.position))
+                if not getattr(self, "_dragging", False):
+                    self._update_controls()
         self.after(200, self._tick)
 
 

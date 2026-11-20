@@ -112,7 +112,18 @@ class PlayerMixin:
         except RuntimeError as e:
             messagebox.showwarning("No se puede reproducir", f"No se pudo reproducir la canción: {e}.")
             return
-        self.player.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(0, 12))
+        self._place_bar()
+
+    def _place_bar(self):
+        """The player bar is shown while something plays, except in "Reproduciendo", whose
+        page has the controls built in."""
+        if self.player is None:
+            return
+        in_now_playing = self.view_mode == PLAYER and self.player_section == "Reproduciendo"
+        if self.player.item and not in_now_playing:
+            self.player.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(0, 12))
+        else:
+            self.player.grid_remove()
 
     # ---------------------------------------------------------------- sound settings
     def _apply_sound_settings(self):
@@ -241,6 +252,7 @@ class PlayerMixin:
                 self.now_playing.on_hide()
             self.main.grid()
         self._mark_nav()
+        self._place_bar()
 
     def _show_player_section(self):
         """Shows "Reproduciendo" or the library (Canciones, Artistas, Álbumes, Listas, Cola)."""
@@ -290,6 +302,7 @@ class PlayerMixin:
         if self.view_mode == PLAYER:
             self._show_player_section()
         self._mark_nav()
+        self._place_bar()
 
     def _open_now_playing(self):
         """Click on the cover or title of the player bar: "Reproduciendo"."""
@@ -297,6 +310,7 @@ class PlayerMixin:
         if self.view_mode == PLAYER:
             self._show_player_section()
             self._mark_nav()
+            self._place_bar()
         else:
             self._on_logo_double_click()
 
