@@ -45,7 +45,7 @@ DEFAULT_CONFIG = {
     "repeat": "off",                 # player: "off" | "all" (the queue) | "one" (the song)
     "eq_enabled": False,             # player: equalizer on/off
     "eq_gains": [0] * 10,            # player: dB per band (see player.engine.EQ_BANDS)
-    "crossfade": 0,                  # player: seconds mixed between songs (0 = no gap, no mixing)
+    "crossfade": 2,                  # player: seconds mixed between songs (0 = no gap, no mixing)
     "auto_lyrics": False,            # player: look up lyrics of songs that have none (opt-in)
     "color_scheme": "Violeta",       # colors of the app (see core.colors.SCHEMES)
     "dynamic_colors": False,         # player bar and "Reproduciendo" take the cover's color

@@ -294,3 +294,8 @@ def test_mix_fades_out_and_in():
     assert fade_out[0] > 9900 and fade_out[-1] < 200
     short = np.frombuffer(player_engine.mix(one, one[:100], 0, 200), dtype=np.int16)
     assert len(short) == 400                                     # the shorter one is padded
+
+
+def test_crossfade_default_is_two_seconds():
+    from audyax.core.config import DEFAULT_CONFIG
+    assert DEFAULT_CONFIG["crossfade"] == 2

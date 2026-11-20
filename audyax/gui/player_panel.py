@@ -120,7 +120,7 @@ class PlayerMixin:
         if self.player is None:
             return
         engine = self.player.engine
-        engine.crossfade = float(self.cfg.get("crossfade", 0) or 0)
+        engine.crossfade = float(self.cfg.get("crossfade", 2) or 0)
         engine.set_equalizer(self.cfg.get("eq_gains") if self.cfg.get("eq_enabled") else None)
 
     def _open_sound(self):

@@ -91,13 +91,13 @@ class SoundWindow(ctk.CTkToplevel):
         self.seg = ctk.CTkSegmentedButton(row, values=["Sin pausa", "Fundido"], command=self._on_transition,
                                           font=app.f_normal, selected_color=C["accent"],
                                           selected_hover_color=C["accent_hover"])
-        crossfade = float(cfg.get("crossfade", 0) or 0)
+        crossfade = float(cfg.get("crossfade", 2) or 0)
         self.seg.set("Fundido" if crossfade > 0 else "Sin pausa")
         self.seg.pack(side="left")
         self.s_fade = ctk.CTkSlider(row, from_=1, to=12, number_of_steps=11, width=180,
                                     progress_color=C["accent"], button_color=C["accent"],
                                     button_hover_color=C["accent_hover"], command=self._on_fade)
-        self.s_fade.set(crossfade or 4)
+        self.s_fade.set(crossfade or 2)
         self.l_fade = ctk.CTkLabel(row, text="", font=app.f_normal, width=50)
         ctk.CTkLabel(tr, text="«Sin pausa»: la siguiente canción empieza justo cuando termina la anterior. "
                               "«Fundido»: el final de una se mezcla con el comienzo de la otra.",
