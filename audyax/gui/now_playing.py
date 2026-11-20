@@ -456,7 +456,7 @@ class NowPlayingView(ctk.CTkFrame):
         if "moon" in ids:
             active = bool(bar.sleep_deadline or bar.sleep_after_song)
             cv.itemconfigure(ids["moon"], image=self._moon_icons[active])
-            cv.itemconfigure(ids["sleep_text"], text=bar.l_sleep.cget("text") if active else "")
+            cv.itemconfigure(ids["sleep_text"], text=bar.sleep_text())
         if "vol_fill" in ids:
             vx = ids["vx0"] + (ids["vx1"] - ids["vx0"]) * engine.volume
             vy = cv.coords(ids["vol_track"])[1]
@@ -488,9 +488,7 @@ class NowPlayingView(ctk.CTkFrame):
         if not ids or "vx0" not in ids:
             return
         v = max(0.0, min(1.0, (event.x - ids["vx0"]) / max(1, ids["vx1"] - ids["vx0"])))
-        bar.engine.volume = v
-        bar.s_volume.set(v)
-        self.app.cfg["volume"] = round(v, 2)
+        bar.set_volume(v)
         self._update_controls()
 
     def _draw_lyrics(self, r, bg, family):

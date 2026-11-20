@@ -48,8 +48,8 @@ DEFAULT_CONFIG = {
     "crossfade": 2,                  # player: seconds mixed between songs (0 = no gap, no mixing)
     "auto_lyrics": False,            # player: look up lyrics of songs that have none (opt-in)
     "color_scheme": "Violeta",       # colors of the app (see core.colors.SCHEMES)
-    "dynamic_colors": False,         # player bar and "Reproduciendo" take the cover's color
-    "np_background": "cover",        # "Reproduciendo" background: "cover" | "image" | "plain"
+    "np_background": "cover",        # player background (Reproduciendo, bar, mini player): "cover" (and
+                                     # the cover's colors) | "image" | "plain" (the scheme's colors)
     "background_image": "",          # own image for that background
     "np_layout": "balanced",         # "Reproduciendo": balanced | cover | lyrics | no_lyrics
     "mini_pos": None,                # [x, y] of the mini player on the screen

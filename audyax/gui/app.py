@@ -531,6 +531,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 view.apply_theme()
 
     def _refresh_now_playing_background(self):
+        """The player's background (and with it, dynamic colors) changed: everything follows."""
+        self._apply_dynamic_colors()
         if self.now_playing is not None:
             self.now_playing.apply_theme()
         if getattr(self, "mini_player", None) is not None:
@@ -543,6 +545,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
             self.player_view.apply_theme()
         if self.now_playing is not None:
             self.now_playing.apply_theme()
+        if self.player is not None:
+            self.player.redraw()
         if mode == "dark":
             self.sw_theme.select()
         else:
@@ -602,7 +606,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
-                "auto_lyrics", "color_scheme", "dynamic_colors", "np_background", "background_image",
+                "auto_lyrics", "color_scheme", "np_background", "background_image",
                 "np_layout", "mini_pos")},
             "watched": self.watched,
         }
