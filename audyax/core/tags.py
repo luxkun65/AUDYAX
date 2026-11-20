@@ -105,6 +105,33 @@ def read_tags(path) -> dict:
     return data
 
 
+_YOUTUBE_URL = re.compile(r"https?://(?:www\.|music\.|m\.)?(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)"
+                          r"[\w-]{6,}[^\s\"'<>]*")
+
+
+def read_source_url(path) -> str:
+    """The YouTube link the song was downloaded from, if it was saved in its tags
+    (yt-dlp writes it in "comment"/"purl"). Empty if there's none."""
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(Path(path))
+    except Exception:
+        return ""
+    if audio is None or not audio.tags:
+        return ""
+    try:
+        values = audio.tags.values() if hasattr(audio.tags, "values") else [v for _k, v in audio.tags]
+    except Exception:
+        return ""
+    for value in values:
+        texts = getattr(value, "text", value)
+        for text in (texts if isinstance(texts, (list, tuple)) else [texts]):
+            found = _YOUTUBE_URL.search(str(text))
+            if found:
+                return found.group(0)
+    return ""
+
+
 def read_cover(path):
     """Bytes of the embedded cover, or None if there is none."""
     path = Path(path)

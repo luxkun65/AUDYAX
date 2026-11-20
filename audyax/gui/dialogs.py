@@ -167,14 +167,17 @@ class ExportWindow(ctk.CTkToplevel):
 # TAG EDITOR
 # ==============================================================================
 class TagEditorWindow(ctk.CTkToplevel):
-    """Fixes the title, artist, album, year, genre and cover of a downloaded file."""
+    """Fixes the title, artist, album, year, genre and cover of a song file.
+    From the download list (vid = its row) or from the player's library (vid=None and
+    on_saved(old_path, new_path, data) to refresh it)."""
 
     FIELDS = [("title", "Título"), ("artist", "Artista"), ("album", "Álbum"),
               ("year", "Año"), ("genre", "Género")]
 
-    def __init__(self, app, vid: str, path: str):
+    def __init__(self, app, vid, path: str, on_saved=None):
         super().__init__(app)
         self.app, self.vid, self.path = app, vid, path
+        self.on_saved = on_saved
         self.title("Editar etiquetas")
         self.geometry("660x470")
         self.resizable(False, False)
@@ -299,7 +302,7 @@ class TagEditorWindow(ctk.CTkToplevel):
         try:
             new_path = rename_file(self.path, name)
         except (OSError, ValueError) as e:
-            self.app._on_tags_saved(self.vid, data, self.new_cover)
+            self._saved(data, self.path)
             self.new_cover = None
             detail = str(e) if isinstance(e, (FileExistsError, ValueError)) else (
                 f"{e}\n\n¿Está abierto en un reproductor? Ciérralo e inténtalo de nuevo.")
@@ -307,5 +310,13 @@ class TagEditorWindow(ctk.CTkToplevel):
                                  f"Las etiquetas sí se guardaron, pero el archivo no se renombró.\n\n{detail}",
                                  parent=self)
             return
-        self.app._on_tags_saved(self.vid, data, self.new_cover, str(new_path))
+        self._saved(data, str(new_path))
         self.destroy()
+
+    def _saved(self, data, new_path):
+        if self.on_saved is not None:
+            self.on_saved(self.path, new_path, data)
+        elif new_path != self.path:
+            self.app._on_tags_saved(self.vid, data, self.new_cover, new_path)
+        else:
+            self.app._on_tags_saved(self.vid, data, self.new_cover)

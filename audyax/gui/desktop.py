@@ -56,14 +56,18 @@ def notifications_available() -> bool:
 
 
 class Tray:
-    """AUDYAX icon next to the clock, with a menu: Abrir, Pausar/Reanudar and Salir.
+    """AUDYAX icon next to the clock, with a menu: Abrir, the music controls (while a song is
+    loaded: play/pause, next, previous), Pausar/Reanudar descargas and Salir.
 
     The functions passed in (on_open, on_pause, on_quit) are called from the tray's
     thread, NOT the window's: whoever passes them must forward them to the window
     (AUDYAX puts them in its event queue)."""
 
-    def __init__(self, image, on_open, on_pause, on_quit, is_paused, logo_ico: str = ""):
+    def __init__(self, image, on_open, on_pause, on_quit, is_paused, logo_ico: str = "",
+                 on_media=None, media_state=None):
         self.image = image
+        # music: on_media("play_pause" | "next" | "previous"); media_state() -> (has song, playing)
+        self.on_media, self.media_state = on_media, media_state
         self.logo_ico = logo_ico    # .ico shown big inside Windows notifications
         self.on_open, self.on_pause, self.on_quit = on_open, on_pause, on_quit
         self.is_paused = is_paused
@@ -81,8 +85,19 @@ class Tray:
         with self._lock:
             if self.icon is not None:
                 return True
+            has_song = lambda item: bool(self.media_state and self.media_state()[0])   # noqa: E731
+            media = []
+            if self.on_media:
+                media = [
+                    pystray.MenuItem(lambda item: "Pausar música" if self.media_state()[1] else "Reproducir música",
+                                     lambda *a: self.on_media("play_pause"), visible=has_song),
+                    pystray.MenuItem("Siguiente canción", lambda *a: self.on_media("next"), visible=has_song),
+                    pystray.MenuItem("Canción anterior", lambda *a: self.on_media("previous"), visible=has_song),
+                    pystray.Menu.SEPARATOR,
+                ]
             menu = pystray.Menu(
                 pystray.MenuItem("Abrir AUDYAX", lambda *a: self.on_open(), default=True),
+                *media,
                 pystray.MenuItem(lambda item: "Reanudar descargas" if self.is_paused()
                                  else "Pausar descargas", lambda *a: self.on_pause()),
                 pystray.Menu.SEPARATOR,
@@ -200,3 +215,32 @@ def batch_summary(downloaded: int, errors: int, skipped: int = 0) -> str:
     if errors:
         parts.append(f"{errors} con error")
     return " · ".join(parts) or "No se descargó ninguna canción"
+
+
+def monitor_rect(window):
+    """(x, y, width, height) in screen pixels of the monitor where `window` is, on Windows;
+    None elsewhere (or if it can't be found). Tk's own full screen always uses the main
+    monitor on Windows, so AUDYAX uses this to fill the monitor the window is on."""
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+        user32 = ctypes.windll.user32
+        user32.MonitorFromWindow.restype = wintypes.HANDLE
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+        monitor = user32.MonitorFromWindow(hwnd, 2)          # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return None
+        r = info.rcMonitor
+        return r.left, r.top, r.right - r.left, r.bottom - r.top
+    except Exception:
+        return None

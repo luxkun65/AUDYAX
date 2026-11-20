@@ -52,3 +52,10 @@ def test_lyric_scroll_eases_and_arrives():
         off = L.lyric_scroll(200, 500, off)
     assert off == -300
     assert -300 < L.lyric_scroll(200, 500, 0) < 0
+
+
+def test_monitor_rect_only_on_windows():
+    import sys
+    from audyax.gui import desktop
+    if not sys.platform.startswith("win"):
+        assert desktop.monitor_rect(object()) is None

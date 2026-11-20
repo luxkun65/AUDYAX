@@ -126,6 +126,10 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.player_view = None     # player (part 2), shown instead of the downloader
         self.now_playing = None     # player's "Reproduciendo" section
         self.player_section = "Canciones"
+        from audyax.core.history import History
+        self.history = History()         # plays per song (smart lists)
+        self._heard = {"path": None, "seconds": 0.0, "counted": False}
+        self.after(2000, self._history_tick)
         self.play_queue = PlayQueue(shuffle=bool(self.cfg.get("shuffle")), repeat=self.cfg.get("repeat", "off"))
         self.view_mode = "downloads"   # "downloads" | "player" (double click on the logo switches)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
@@ -140,6 +144,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                                on_pause=lambda: self.events.put(("tray", "pause")),
                                on_quit=lambda: self.events.put(("tray", "quit")),
                                is_paused=lambda: self.pause.is_set(),
+                               on_media=lambda action: self.events.put(("tray", action)),
+                               media_state=self._tray_media_state,
                                logo_ico=str(resource_path("audyax.ico")))
         self.searching = False
         self.updating = False
@@ -527,6 +533,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
     def _refresh_now_playing_background(self):
         if self.now_playing is not None:
             self.now_playing.apply_theme()
+        if getattr(self, "mini_player", None) is not None:
+            self.mini_player.refresh()
 
     def _apply_theme(self, mode: str):
         self.theme = mode
@@ -595,7 +603,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
                 "auto_lyrics", "color_scheme", "dynamic_colors", "np_background", "background_image",
-                "np_layout")},
+                "np_layout", "mini_pos")},
             "watched": self.watched,
         }
 
@@ -1076,6 +1084,10 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         elif action == "pause":
             if self.pending or self.pause.is_set():
                 self._toggle_pause()
+        elif action in ("play_pause", "next", "previous"):
+            if self.player is not None and self.player.item:
+                {"play_pause": self.player.toggle, "next": lambda: self.player.jump(1),
+                 "previous": lambda: self.player.jump(-1)}[action]()
         elif action == "quit":
             if self.pending:
                 self._from_tray()
@@ -1168,6 +1180,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self._close()
 
     def _close(self):
+        if getattr(self, "mini_player", None) is not None:
+            self.mini_player.destroy()
         if self.player is not None:
             self.player.engine.stop()
         if self.player_view is not None:
