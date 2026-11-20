@@ -51,6 +51,7 @@ DEFAULT_CONFIG = {
     "dynamic_colors": False,         # player bar and "Reproduciendo" take the cover's color
     "np_background": "cover",        # "Reproduciendo" background: "cover" | "image" | "plain"
     "background_image": "",          # own image for that background
+    "np_layout": "balanced",         # "Reproduciendo": balanced | cover | lyrics | no_lyrics
     # Watched playlists
     "watched": [],                 # [{url, name, folder, last_check, new_count}] (see watched.py)
     "check_watched": True,       # check them when AUDYAX opens

@@ -32,6 +32,8 @@ def recolor(widget, mapping: dict) -> int:
     stack = [widget]
     while stack:
         w = stack.pop()
+        if getattr(w, "_keep_colors", False):   # e.g. the scheme samples: they show other schemes
+            continue
         stack.extend(w.winfo_children())
         if not isinstance(w, _CTK_TYPES):   # only customtkinter widgets (and windows)
             continue

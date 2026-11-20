@@ -50,6 +50,7 @@ class AppearanceWindow(ctk.CTkToplevel):
             dot = ctk.CTkButton(cell, text="", width=44, height=44, corner_radius=22, fg_color=accent,
                                 hover_color=accent, border_width=3, border_color=C["card"],
                                 command=lambda n=name: self._set_scheme(n))
+            dot._keep_colors = True        # a scheme change must not repaint the samples
             dot.pack()
             ctk.CTkLabel(cell, text=name, font=app.f_small).pack()
             self.swatches[name] = dot

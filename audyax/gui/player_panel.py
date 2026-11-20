@@ -162,24 +162,24 @@ class PlayerMixin:
 
     # ---------------------------------------------------------------- dynamic colors
     def _apply_dynamic_colors(self, from_settings: bool = False):
-        """The player bar takes the hue of the cover playing (or goes back to the scheme)."""
+        """Paints the player bar: with the hue of the cover playing (dynamic colors) or with
+        the color scheme. Always from scratch, so it can't get out of step."""
         if self.player is None:
             return
+        palette = self.player_palette()
+        self.player.set_colors({k: palette[k] for k in self.player.colors if k in palette})
+        if from_settings and self.now_playing is not None:
+            self.now_playing.apply_theme()   # on a song change it updates by itself
+
+    def player_palette(self) -> dict:
+        """Colors of the player right now: the cover's (dynamic colors) or the scheme's.
+        "Reproduciendo" uses the same ones, so the bar and the view always match."""
         from audyax.core import colors
         from audyax.gui import theming
         hue = None
-        if self.cfg.get("dynamic_colors") and self.player.item:
+        if self.cfg.get("dynamic_colors") and self.player is not None and self.player.item:
             hue = colors.cover_hue(self.player.item.get("image"))
-        new = theming.palette_for(hue)
-        old = getattr(self, "_bar_palette", None) or dict(C)
-        mapping = theming.color_mapping(old, new)
-        if mapping:
-            theming.recolor(self.player, mapping)
-            self.player.colors = {k: mapping.get(v, v) for k, v in self.player.colors.items()}
-            self.player.refresh_icons()
-        self._bar_palette = new
-        if from_settings and self.now_playing is not None:
-            self.now_playing.apply_theme()   # on a song change it updates by itself
+        return theming.palette_for(hue)
 
     def _on_track_change(self, item):
         self._apply_dynamic_colors()
@@ -224,6 +224,7 @@ class PlayerMixin:
     def _show_view(self, mode: str):
         if mode == self.view_mode:
             return
+        self._set_np_fullscreen(False)
         self.view_mode = mode
         if mode == PLAYER:
             if self.player_view is None:
@@ -252,11 +253,36 @@ class PlayerMixin:
             self.now_playing.grid(**place)
             self.now_playing.on_show()
         else:
+            self._set_np_fullscreen(False)
             if self.now_playing is not None:
                 self.now_playing.grid_remove()
                 self.now_playing.on_hide()
             self.player_view.set_view(self.player_section)
             self.player_view.grid(**place)
+
+    # ---------------------------------------------------------------- full screen
+    def _toggle_np_fullscreen(self):
+        self._set_np_fullscreen(not getattr(self, "_np_fullscreen", False))
+
+    def _set_np_fullscreen(self, on: bool):
+        """"Reproduciendo" in full screen: the window fills the screen and the sidebar hides
+        (the player bar stays, to control the music). Esc goes back."""
+        if on == getattr(self, "_np_fullscreen", False):
+            return
+        self._np_fullscreen = on
+        try:
+            self.attributes("-fullscreen", on)
+        except Exception:
+            pass
+        if on:
+            self.sidebar.grid_remove()
+            if not getattr(self, "_esc_bound", False):
+                self.bind("<Escape>", lambda _e: self._set_np_fullscreen(False), add="+")
+                self._esc_bound = True
+        else:
+            self.sidebar.grid()
+        if self.now_playing is not None:
+            self.now_playing.fullscreen_changed(on)
 
     def _player_section(self, section: str):
         """A section of the player's sidebar."""

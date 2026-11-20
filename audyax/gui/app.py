@@ -404,7 +404,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                     pass
 
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(self, width=112, corner_radius=0, fg_color=C["sidebar"])
+        sidebar = self.sidebar = ctk.CTkFrame(self, width=112, corner_radius=0, fg_color=C["sidebar"])
         sidebar.grid(row=0, column=0, rowspan=2, sticky="ns")   # row 1: the player bar
         sidebar.grid_propagate(False)
         sidebar.pack_propagate(False)
@@ -516,19 +516,10 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         if self.cfg.get("color_scheme", "Violeta") == name:
             return
         self.cfg["color_scheme"] = name
-        if self.player is not None and getattr(self, "_bar_palette", None):
-            # the bar may have the cover's colors: back to the scheme first, so everything changes together
-            back = theming.color_mapping(self._bar_palette, C)
-            theming.recolor(self.player, back)
-            self.player.colors = {k: back.get(v, v) for k, v in self.player.colors.items()}
-        mapping = theming.apply_scheme(self, name)
-        self._bar_palette = dict(C)
+        theming.apply_scheme(self, name)
         self.l_ornament.configure(image=equalizer_image())
         self._mark_nav()
-        if self.player is not None:
-            self.player.colors = {k: mapping.get(v, v) for k, v in self.player.colors.items()}
-            self.player.refresh_icons()
-            self._apply_dynamic_colors()
+        self._apply_dynamic_colors()          # the bar: the new scheme (or the cover's colors)
         for view in (self.player_view, self.now_playing):
             if view is not None:
                 view.apply_theme()
@@ -603,7 +594,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
-                "auto_lyrics", "color_scheme", "dynamic_colors", "np_background", "background_image")},
+                "auto_lyrics", "color_scheme", "dynamic_colors", "np_background", "background_image",
+                "np_layout")},
             "watched": self.watched,
         }
 

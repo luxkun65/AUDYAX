@@ -324,6 +324,25 @@ class PlayerBar(ctk.CTkFrame if ctk else object):
             self.btn_play.configure(image=self.ico_play)
         self._show_sleep()
 
+    def set_colors(self, colors: dict):
+        """Paints the whole bar with `colors` (same keys as at creation). Every widget gets its
+        color from the key it uses, so the result never depends on the previous colors."""
+        self.colors = c = {**self.colors, **colors}
+        self.configure(fg_color=c["card"], border_color=c.get("border", c["card"]))
+        self.l_cover.configure(fg_color=c["hover"])
+        self.l_title.configure(text_color=c["text"])
+        self.l_sub.configure(text_color=c["muted"])
+        for label in (self.l_time, self.l_total):
+            label.configure(text_color=c["muted"])
+        self.l_sleep.configure(text_color=c["accent"])
+        for slider in (self.bar, self.s_volume):
+            slider.configure(progress_color=c["accent"], button_color=c["accent"],
+                             button_hover_color=c["accent_hover"])
+        for button, _name, _size, accent in getattr(self, "_icon_buttons", []):
+            button.configure(fg_color=c["accent"] if accent else "transparent",
+                             hover_color=c["accent_hover"] if accent else c["hover"])
+        self.refresh_icons()
+
     def refresh_icons(self):
         """Draws the icons again with self.colors (after a color change)."""
         c = self.colors
