@@ -10,7 +10,7 @@ import customtkinter as ctk
 
 from audyax.core import colors
 
-BACKGROUNDS = {"cover": "Portada", "image": "Imagen propia", "plain": "Liso"}
+BACKGROUNDS = {"cover": "Portada", "dynamic": "Dinámico", "image": "Imagen propia", "plain": "Liso"}
 
 
 class AppearanceWindow(ctk.CTkToplevel):
@@ -59,9 +59,10 @@ class AppearanceWindow(ctk.CTkToplevel):
 
         # ---- player look: background and colors, one setting for everything
         bg = self._card("Fondo y colores del reproductor",
-                        "Se usa en «Reproduciendo», en la barra de reproducción y en el mini reproductor.\n"
-                        "Portada: la portada difuminada de fondo y sus colores.  Imagen propia: una imagen "
-                        "tuya con los colores del esquema.  Liso: el fondo normal y los colores del esquema.")
+                        "Se usa igual en «Reproduciendo», en la barra de reproducción y en el mini "
+                        "reproductor.\nFondo — Portada: la portada difuminada.  Dinámico: un degradado del "
+                        "color de la portada (cambia con cada canción).  Imagen propia: una imagen tuya.  "
+                        "Liso: el fondo normal de la aplicación.")
         row = ctk.CTkFrame(bg, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(8, 4))
         self.seg_bg = ctk.CTkSegmentedButton(row, values=list(BACKGROUNDS.values()), command=self._on_background,
@@ -71,6 +72,11 @@ class AppearanceWindow(ctk.CTkToplevel):
         self.seg_bg.pack(side="left")
         pick = ctk.CTkFrame(bg, fg_color="transparent")
         pick.pack(fill="x", padx=16, pady=(4, 14))
+        self.sw_dynamic = ctk.CTkSwitch(bg, text="Colores dinámicos (los acentos toman el color de la portada)",
+                                        font=app.f_normal, command=self._on_dynamic, progress_color=C["accent"])
+        if cfg.get("dynamic_colors", True):
+            self.sw_dynamic.select()
+        self.sw_dynamic.pack(anchor="w", padx=16, pady=(0, 14))
         self.btn_pick = app._button(pick, "Elegir imagen…", self._choose_image, height=30)
         self.btn_pick.pack(side="left")
         self.l_image = ctk.CTkLabel(pick, text="", font=app.f_small, text_color=C["muted"], anchor="w")
@@ -88,6 +94,11 @@ class AppearanceWindow(ctk.CTkToplevel):
     def _set_scheme(self, name):
         self.app.set_color_scheme(name)
         self._mark_scheme()
+
+    def _on_dynamic(self):
+        """Dynamic colors on/off: Reproduciendo, the player bar and the mini player follow."""
+        self.app.cfg["dynamic_colors"] = bool(self.sw_dynamic.get())
+        self.app._refresh_now_playing_background()
 
     def _on_background(self, label):
         mode = next(k for k, v in BACKGROUNDS.items() if v == label)

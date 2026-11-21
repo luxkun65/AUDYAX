@@ -70,8 +70,9 @@ def _clamp_lines(cv, item, text, max_lines):
 
 def background_for(app, cover, w, h):
     """(PIL image of w × h, on_image) with the background chosen in Apariencia: the blurred
-    cover, your own image, or the plain app color (on_image=False). Shared by "Reproduciendo"
-    and the mini player, so both always look the same."""
+    cover, the cover's color (dynamic), your own image, or the plain app color
+    (on_image=False). Shared by "Reproduciendo", the player bar and the mini player, so they
+    always look the same."""
     from audyax.gui.style import C
     cfg = app.cfg
     mode = cfg.get("np_background", "cover")
@@ -83,6 +84,8 @@ def background_for(app, cover, w, h):
             src = None
     elif mode == "cover" and cover is not None:
         src = (cover, 40, 0.42)
+    elif mode == "dynamic" and cover is not None:
+        return colors.dynamic_background(cover, (w, h)), True
     if src is None:
         i = 1 if ctk.get_appearance_mode() == "Dark" else 0
         return Image.new("RGB", (max(1, w), max(1, h)), C["bg"][i]), False

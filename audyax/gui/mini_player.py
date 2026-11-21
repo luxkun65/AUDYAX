@@ -140,7 +140,7 @@ class MiniPlayer(ctk.CTkToplevel):
         item = bar.item if bar is not None else None
         cfg = self.app.cfg
         key = (item["path"] if item else None, id(item.get("image")) if item else None,
-               cfg.get("np_background"), cfg.get("background_image"),
+               cfg.get("np_background"), cfg.get("background_image"), cfg.get("dynamic_colors"),
                tuple(self.C["accent"]), ctk.get_appearance_mode())
         if key != self._shown_key:
             self._shown_key = key

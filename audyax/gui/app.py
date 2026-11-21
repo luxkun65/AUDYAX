@@ -606,7 +606,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "proxy_enabled", "proxy", "cookies_enabled", "cookies_source", "cookies_file",
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
-                "auto_lyrics", "color_scheme", "np_background", "background_image",
+                "auto_lyrics", "color_scheme", "np_background", "background_image", "dynamic_colors",
                 "np_layout", "mini_pos")},
             "watched": self.watched,
         }

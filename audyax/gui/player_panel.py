@@ -231,9 +231,9 @@ class PlayerMixin:
             self.now_playing.apply_theme()   # on a song change it updates by itself
 
     def dynamic_colors(self) -> bool:
-        """The player takes the cover's colors when its background is the cover (one setting
-        in Apariencia for both: "Portada")."""
-        return self.cfg.get("np_background", "cover") == "cover"
+        """The player (Reproduciendo, the bar and the mini player) takes its accent colors from
+        the cover playing. A switch of its own in Apariencia, independent of the background."""
+        return bool(self.cfg.get("dynamic_colors", True))
 
     def player_palette(self) -> dict:
         """Colors of the player right now: the cover's (dynamic colors) or the scheme's.
