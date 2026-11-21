@@ -70,8 +70,9 @@ def _clamp_lines(cv, item, text, max_lines):
 
 def background_for(app, cover, w, h):
     """(PIL image of w × h, on_image) with the background chosen in Apariencia: the blurred
-    cover, your own image, or the plain app color (on_image=False). Shared by "Reproduciendo"
-    and the mini player, so both always look the same."""
+    cover, the cover's color (dynamic), your own image, or the plain app color
+    (on_image=False). Shared by "Reproduciendo", the player bar and the mini player, so they
+    always look the same."""
     from audyax.gui.style import C
     cfg = app.cfg
     mode = cfg.get("np_background", "cover")
@@ -83,6 +84,8 @@ def background_for(app, cover, w, h):
             src = None
     elif mode == "cover" and cover is not None:
         src = (cover, 40, 0.42)
+    elif mode == "dynamic" and cover is not None:
+        return colors.dynamic_background(cover, (w, h)), True
     if src is None:
         i = 1 if ctk.get_appearance_mode() == "Dark" else 0
         return Image.new("RGB", (max(1, w), max(1, h)), C["bg"][i]), False
@@ -456,7 +459,7 @@ class NowPlayingView(ctk.CTkFrame):
         if "moon" in ids:
             active = bool(bar.sleep_deadline or bar.sleep_after_song)
             cv.itemconfigure(ids["moon"], image=self._moon_icons[active])
-            cv.itemconfigure(ids["sleep_text"], text=bar.l_sleep.cget("text") if active else "")
+            cv.itemconfigure(ids["sleep_text"], text=bar.sleep_text())
         if "vol_fill" in ids:
             vx = ids["vx0"] + (ids["vx1"] - ids["vx0"]) * engine.volume
             vy = cv.coords(ids["vol_track"])[1]
@@ -488,9 +491,7 @@ class NowPlayingView(ctk.CTkFrame):
         if not ids or "vx0" not in ids:
             return
         v = max(0.0, min(1.0, (event.x - ids["vx0"]) / max(1, ids["vx1"] - ids["vx0"])))
-        bar.engine.volume = v
-        bar.s_volume.set(v)
-        self.app.cfg["volume"] = round(v, 2)
+        bar.set_volume(v)
         self._update_controls()
 
     def _draw_lyrics(self, r, bg, family):

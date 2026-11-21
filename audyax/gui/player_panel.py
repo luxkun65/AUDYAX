@@ -90,9 +90,10 @@ class PlayerMixin:
     def _ensure_player(self):
         if self.player is not None:
             return
+        from audyax.gui.now_playing import background_for
         from audyax.gui.player_view import load_cover
         colors = {k: C[k] for k in ("card", "text", "muted", "accent", "accent_hover",
-                                     "on_accent", "hover", "border")}
+                                     "on_accent", "hover", "border", "bg")}
         fonts = {"bold": self.f_bold, "normal": self.f_normal, "small": self.f_small}
         self.player = PlayerBar(
             self, colors, fonts, neighbor=lambda _item, _step: None, queue=self.play_queue,
@@ -100,6 +101,7 @@ class PlayerMixin:
             on_close=self._on_player_closed, on_track_change=self._on_track_change,
             on_modes_change=self._on_modes_change, cover_loader=lambda item: load_cover(item["path"]),
             on_open=self._open_now_playing, on_sound=self._open_sound, on_mini=self._open_mini_player,
+            background=lambda cover, w, h: background_for(self, cover, w, h),
             volume=float(self.cfg.get("volume", 0.8)))
         self._apply_sound_settings()
 
@@ -228,13 +230,18 @@ class PlayerMixin:
         if from_settings and self.now_playing is not None:
             self.now_playing.apply_theme()   # on a song change it updates by itself
 
+    def dynamic_colors(self) -> bool:
+        """The player (Reproduciendo, the bar and the mini player) takes its accent colors from
+        the cover playing. A switch of its own in Apariencia, independent of the background."""
+        return bool(self.cfg.get("dynamic_colors", True))
+
     def player_palette(self) -> dict:
         """Colors of the player right now: the cover's (dynamic colors) or the scheme's.
         "Reproduciendo" uses the same ones, so the bar and the view always match."""
         from audyax.core import colors
         from audyax.gui import theming
         hue = None
-        if self.cfg.get("dynamic_colors") and self.player is not None and self.player.item:
+        if self.dynamic_colors() and self.player is not None and self.player.item:
             hue = colors.cover_hue(self.player.item.get("image"))
         return theming.palette_for(hue)
 

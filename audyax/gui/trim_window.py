@@ -151,7 +151,7 @@ class TrimWindow(ctk.CTkToplevel):
                 return
             if bar.engine.position >= end:
                 bar.engine.pause_playback()
-                bar.btn_play.configure(image=bar.ico_play)
+                bar.show_state()
                 return
             self._preview_job = self.after(100, watch)
         self._preview_job = self.after(300, watch)

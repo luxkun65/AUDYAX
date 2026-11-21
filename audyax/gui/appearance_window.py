@@ -1,6 +1,7 @@
-"""AUDYAX: the "Apariencia" window (appearance package). Color scheme of the whole app,
-dynamic colors (taken from the cover that's playing) and the background of "Reproduciendo"
-(blurred cover, an image of your own or plain). Every change applies right away."""
+"""AUDYAX: the "Apariencia" window (appearance package). Color scheme of the whole app, and
+one setting for the player's look ("Reproduciendo", the player bar and the mini player):
+the cover (blurred behind, and its colors), an image of your own, or plain. Every change
+applies right away."""
 
 from pathlib import Path
 from tkinter import filedialog
@@ -9,7 +10,7 @@ import customtkinter as ctk
 
 from audyax.core import colors
 
-BACKGROUNDS = {"cover": "Portada difuminada", "image": "Imagen propia", "plain": "Liso"}
+BACKGROUNDS = {"cover": "Portada", "dynamic": "Dinámico", "image": "Imagen propia", "plain": "Liso"}
 
 
 class AppearanceWindow(ctk.CTkToplevel):
@@ -56,18 +57,12 @@ class AppearanceWindow(ctk.CTkToplevel):
             self.swatches[name] = dot
         self._mark_scheme()
 
-        # ---- dynamic colors
-        dyn = self._card("Colores dinámicos", "La barra de reproducción y «Reproduciendo» toman el color "
-                                              "principal de la portada que suena.")
-        self.sw_dynamic = ctk.CTkSwitch(dyn, text="Usar los colores de la portada", font=app.f_normal,
-                                        command=self._on_dynamic, progress_color=C["accent"])
-        if cfg.get("dynamic_colors"):
-            self.sw_dynamic.select()
-        self.sw_dynamic.pack(anchor="w", padx=16, pady=(8, 14))
-
-        # ---- background of "Reproduciendo"
-        bg = self._card("Fondo de «Reproduciendo»", "La portada muy difuminada detrás de la letra, una "
-                                                   "imagen tuya, o el fondo normal de la aplicación.")
+        # ---- player look: background and colors, one setting for everything
+        bg = self._card("Fondo y colores del reproductor",
+                        "Se usa igual en «Reproduciendo», en la barra de reproducción y en el mini "
+                        "reproductor.\nFondo — Portada: la portada difuminada.  Dinámico: un degradado del "
+                        "color de la portada (cambia con cada canción).  Imagen propia: una imagen tuya.  "
+                        "Liso: el fondo normal de la aplicación.")
         row = ctk.CTkFrame(bg, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(8, 4))
         self.seg_bg = ctk.CTkSegmentedButton(row, values=list(BACKGROUNDS.values()), command=self._on_background,
@@ -77,6 +72,11 @@ class AppearanceWindow(ctk.CTkToplevel):
         self.seg_bg.pack(side="left")
         pick = ctk.CTkFrame(bg, fg_color="transparent")
         pick.pack(fill="x", padx=16, pady=(4, 14))
+        self.sw_dynamic = ctk.CTkSwitch(bg, text="Colores dinámicos (los acentos toman el color de la portada)",
+                                        font=app.f_normal, command=self._on_dynamic, progress_color=C["accent"])
+        if cfg.get("dynamic_colors", True):
+            self.sw_dynamic.select()
+        self.sw_dynamic.pack(anchor="w", padx=16, pady=(0, 14))
         self.btn_pick = app._button(pick, "Elegir imagen…", self._choose_image, height=30)
         self.btn_pick.pack(side="left")
         self.l_image = ctk.CTkLabel(pick, text="", font=app.f_small, text_color=C["muted"], anchor="w")
@@ -96,8 +96,9 @@ class AppearanceWindow(ctk.CTkToplevel):
         self._mark_scheme()
 
     def _on_dynamic(self):
+        """Dynamic colors on/off: Reproduciendo, the player bar and the mini player follow."""
         self.app.cfg["dynamic_colors"] = bool(self.sw_dynamic.get())
-        self.app._apply_dynamic_colors(from_settings=True)
+        self.app._refresh_now_playing_background()
 
     def _on_background(self, label):
         mode = next(k for k, v in BACKGROUNDS.items() if v == label)

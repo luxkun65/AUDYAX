@@ -69,3 +69,15 @@ def test_mean_lighten_and_accent():
     assert colors.lighten("#ffffff", -1) == "#000000"
     assert colors.readable_accent(None) == "#e9e4f5"
     assert colorsys.rgb_to_hls(*colors.hex_to_rgb(colors.readable_accent(0.6)))[1] > 0.6
+
+
+def test_dynamic_background_takes_the_cover_color():
+    blue = Image.new("RGB", (100, 100), "#1e6fd9")
+    bg = colors.dynamic_background(blue, (400, 120))
+    assert bg.size == (400, 120)
+    r, g, b = bg.getpixel((20, 20))
+    assert b > r and b > g and max(r, g, b) < 140          # blue, and dark enough for light text
+    assert sum(bg.getpixel((390, 115))) < sum(bg.getpixel((5, 5)))   # gets darker towards the corner
+    gray = colors.dynamic_background(Image.new("RGB", (10, 10), "#808080"), (50, 50))
+    assert gray.size == (50, 50)
+    assert colors.dynamic_background(None, (10, 10)).size == (10, 10)

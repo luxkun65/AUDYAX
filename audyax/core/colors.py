@@ -104,6 +104,32 @@ def blurred_background(image, size, blur: float = 40, dim: float = 0.42):
     return ImageEnhance.Brightness(img).enhance(dim)
 
 
+def dynamic_background(cover, size):
+    """Background made of the cover's color (not the picture): a deep diagonal gradient of
+    its main hue, dark enough for light text. Gray covers give a gradient of their average
+    color. Changes with every song."""
+    from PIL import Image
+    w, h = max(1, int(size[0])), max(1, int(size[1]))
+    hue = cover_hue(cover)
+    if hue is not None:
+        top = colorsys.hls_to_rgb(hue, 0.30, 0.62)
+        bottom = colorsys.hls_to_rgb((hue + 0.04) % 1.0, 0.09, 0.55)
+    else:
+        r, g, b = hex_to_rgb(mean_color(cover)) if cover is not None else (0.2, 0.2, 0.22)
+        h0, l0, s0 = colorsys.rgb_to_hls(r, g, b)
+        top = colorsys.hls_to_rgb(h0, min(0.30, max(0.18, l0)), s0)
+        bottom = colorsys.hls_to_rgb(h0, 0.07, s0)
+    # small gradient, scaled up: smooth and fast at any size
+    gw, gh = 64, max(2, min(64, round(64 * h / w)) if w >= h else 64)
+    small = Image.new("RGB", (gw, gh))
+    px = small.load()
+    for y in range(gh):
+        for x in range(gw):
+            t = min(1.0, (x / max(1, gw - 1)) * 0.55 + (y / max(1, gh - 1)) * 0.45)
+            px[x, y] = tuple(round(255 * (a + (b - a) * t)) for a, b in zip(top, bottom))
+    return small.resize((w, h), Image.BILINEAR)
+
+
 def mean_color(image) -> str:
     """Average color of an image, as "#rrggbb" (for panels on top of the background)."""
     r, g, b = image.convert("RGB").resize((1, 1), 4).getpixel((0, 0))   # 4 = BOX filter
