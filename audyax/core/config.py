@@ -50,6 +50,8 @@ DEFAULT_CONFIG = {
     "color_scheme": "Violeta",       # colors of the app (see core.colors.SCHEMES)
     "np_background": "cover",        # player background (Reproduciendo, bar, mini player): "cover"
                                      # (blurred cover) | "dynamic" (the cover's color) | "image" | "plain"
+    "rg_playback": "track",          # player: same loudness with ReplayGain: "off" | "track" | "album"
+    "media_keys": True,              # player: keyboard media keys (play/pause, next, previous)
     "dynamic_colors": True,          # player accents taken from the cover (any background); off = scheme
     "background_image": "",          # own image for that background
     "np_layout": "balanced",         # "Reproduciendo": balanced | cover | lyrics | no_lyrics

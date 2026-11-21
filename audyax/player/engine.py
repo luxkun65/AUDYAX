@@ -196,7 +196,8 @@ class AudioEngine:
         so `ahead` songs may already be waiting after the one that is heard: the answer is
         the song after those. It must not move anything.
       on_advance(path) -> called from the audio thread when that song starts sounding.
-    crossfade > 0 mixes that many seconds of both songs."""
+    crossfade > 0 mixes that many seconds of both songs. rg_db(path) -> dB applies each song's
+    ReplayGain, so all songs sound equally loud."""
 
     def __init__(self, on_finish=None, output_factory=SounddeviceOutput):
         self.on_finish = on_finish
@@ -206,6 +207,7 @@ class AudioEngine:
         self._factory = output_factory
         self._volume = 1.0
         self._eq = None                   # gains in dB per band, or None
+        self.rg_db = None                 # callable(path) -> dB of ReplayGain for that song, or None
         self.path, self.duration = None, 0.0
         self.status = "stopped"           # "playing" | "paused" | "stopped"
         self._offset, self._frames = 0.0, 0
@@ -255,6 +257,28 @@ class AudioEngine:
         self._stop_all()
         self.status = "stopped"
 
+    def _filter_for(self, path) -> str:
+        """FFmpeg filters for one song: its ReplayGain (if rg_db is set) and the equalizer.
+        Each song gets its own, so the gain is right also when songs follow without a gap."""
+        parts = []
+        if callable(self.rg_db):
+            try:
+                db = float(self.rg_db(path) or 0.0)
+            except Exception:
+                db = 0.0
+            if abs(db) >= 0.05:
+                parts.append(f"volume={db:.2f}dB")
+        eq = eq_filter(self._eq)
+        if eq:
+            parts.append(eq)
+        return ",".join(parts)
+
+    def refilter(self):
+        """The gain or the equalizer changed: if something plays, it continues from the same
+        point with the new sound."""
+        if self.status in ("playing", "paused") and self.path:
+            self.seek(self.position)
+
     def set_equalizer(self, gains):
         """Changes the equalizer (None or all 0 = off). If something is playing it continues
         from the same point with the new sound."""
@@ -292,7 +316,7 @@ class AudioEngine:
             self._end_of_stream = False
             self._written = self._consumed = 0
             self._marks = []
-        first = _Decoder(self.path, start_at, eq_filter(self._eq))
+        first = _Decoder(self.path, start_at, self._filter_for(self.path))
         self._decoders = [first]
         threading.Thread(target=self._read, args=(gen, first), daemon=True).start()
         # Wait until something is decoded before opening the audio (max 1 s): otherwise the
@@ -317,7 +341,7 @@ class AudioEngine:
             path = None
         if not path or not os.path.isfile(path):
             return None
-        decoder = _Decoder(path, 0.0, eq_filter(self._eq))
+        decoder = _Decoder(path, 0.0, self._filter_for(path))
         with self._cond:
             if gen != self._generation:
                 decoder.kill()

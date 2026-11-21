@@ -130,6 +130,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self.history = History()         # plays per song (smart lists)
         self._heard = {"path": None, "seconds": 0.0, "counted": False}
         self.after(2000, self._history_tick)
+        self._rg_cache = {}               # path -> (mtime, ReplayGain read from its tags)
+        self._library_job = None
         self.play_queue = PlayQueue(shuffle=bool(self.cfg.get("shuffle")), repeat=self.cfg.get("repeat", "off"))
         self.view_mode = "downloads"   # "downloads" | "player" (double click on the logo switches)
         self.watched = [dict(v) for v in self.cfg.get("watched") or []]
@@ -147,6 +149,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                                on_media=lambda action: self.events.put(("tray", action)),
                                media_state=self._tray_media_state,
                                logo_ico=str(resource_path("audyax.ico")))
+        self.media_keys = None
+        self.after(500, self._setup_media_keys)
         self.searching = False
         self.updating = False
         self._last_offered = ""     # last clipboard link already offered
@@ -607,6 +611,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                 "lyrics", "musicbrainz", "caa_cover", "volume", "check_watched", "auto_download_new",
                 "library_folder", "shuffle", "repeat", "eq_enabled", "eq_gains", "crossfade",
                 "auto_lyrics", "color_scheme", "np_background", "background_image", "dynamic_colors",
+                "rg_playback", "media_keys",
                 "np_layout", "mini_pos")},
             "watched": self.watched,
         }
@@ -944,8 +949,10 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
             if ev[1] in self.rows:
                 self.rows[ev[1]]["cancelled"] = False  # it finished right before being cancelled
             self._row(ev[1], color="green", text="Descargada", reason="", **ev[2])
+            self._library_changed_soon()
         elif kind == "rg":
             self._row(ev[1], replaygain=ev[2])
+            self._library_changed_soon()
         elif kind == "skipped":
             self.batch["omit"] += 1
             self._row(ev[1], color="green", text="Ya descargada antes")
@@ -1184,6 +1191,8 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         self._close()
 
     def _close(self):
+        if getattr(self, "media_keys", None) is not None:
+            self.media_keys.stop()
         if getattr(self, "mini_player", None) is not None:
             self.mini_player.destroy()
         if self.player is not None:

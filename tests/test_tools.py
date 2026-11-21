@@ -103,3 +103,38 @@ def test_read_source_url(tmp_path):
         assert tags.read_source_url(out) == "https://www.youtube.com/watch?v=dQw4w9WgXcQ", ext
     assert tags.read_source_url(src) == ""
     assert tags.read_source_url(tmp_path / "no_existe.mp3") == ""
+
+
+# ------------------------------------------------------------------ ReplayGain while playing
+from audyax.core import replaygain as rg  # noqa: E402
+
+
+@needs_ffmpeg
+@needs_mutagen
+def test_read_replaygain_round_trip(tmp_path):
+    track = {"gain": -6.5, "peak": 0.95, "lufs": -11.5}
+    album = {"gain": -5.0, "peak": 0.98, "lufs": -13.0}
+    for ext in ("mp3", "m4a"):
+        song = make_audio(tmp_path / f"a.{ext}", seconds=1)
+        rg.write_replaygain(song, track, album)
+        info = rg.read_replaygain(song)
+        assert info == {"track_gain": -6.5, "track_peak": 0.95, "album_gain": -5.0, "album_peak": 0.98}, ext
+    opus = make_audio(tmp_path / "a.opus", seconds=1)
+    rg.write_replaygain(opus, track, album)
+    info = rg.read_replaygain(opus)
+    assert abs(info["track_gain"] - -6.5) < 0.01 and abs(info["album_gain"] - -5.0) < 0.01
+    plain = make_audio(tmp_path / "b.mp3", seconds=1)
+    assert rg.read_replaygain(plain) == {}
+    assert rg.read_replaygain(tmp_path / "no_existe.mp3") == {}
+
+
+def test_playback_db():
+    info = {"track_gain": -6.0, "track_peak": 0.9, "album_gain": -4.0, "album_peak": 0.95}
+    assert rg.playback_db(info, "track") == -6.0
+    assert rg.playback_db(info, "album") == -4.0
+    assert rg.playback_db(info, "off") == 0.0
+    assert rg.playback_db({}, "track") == 0.0
+    assert rg.playback_db({"track_gain": -3.0}, "album") == -3.0          # no album value: track
+    quiet = {"track_gain": 8.0, "track_peak": 0.7}                        # boost limited by the peak
+    assert rg.playback_db(quiet, "track") == round(-20 * __import__("math").log10(0.7), 2)
+    assert rg.playback_db({"track_gain": 2.0}, "track", preamp=1.5) == 3.5

@@ -299,3 +299,31 @@ def test_mix_fades_out_and_in():
 def test_crossfade_default_is_two_seconds():
     from audyax.core.config import DEFAULT_CONFIG
     assert DEFAULT_CONFIG["crossfade"] == 2
+
+
+@needs_ffmpeg
+def test_replaygain_lowers_each_song_by_its_own_gain(engine, tmp_path):
+    loud, quiet = _tone(tmp_path / "loud.wav", 440, 1), _tone(tmp_path / "quiet.wav", 440, 1)
+    gains = {str(loud): -12.0, str(quiet): 0.0}
+    engine.rg_db = lambda path: gains.get(str(path), 0.0)
+    advanced = []
+    engine.peek_next = lambda ahead: str(quiet) if ahead == 0 and not advanced else None
+    engine.on_advance = advanced.append
+    engine.play(loud)
+    assert engine.end.wait(10)
+    played = np.frombuffer(bytes(FakeOutput.instances[0].played), dtype=np.int16).astype(np.float32)[::2]
+    sr = player_engine.SAMPLE_RATE
+    first = np.abs(played[int(0.2 * sr):int(0.8 * sr)]).mean()
+    second = np.abs(played[int(1.2 * sr):int(1.8 * sr)]).mean()
+    assert 3.0 < second / first < 5.0          # -12 dB ≈ a quarter, only on the first song
+
+
+def test_filter_for_combines_gain_and_equalizer():
+    e = player_engine.AudioEngine(output_factory=lambda *a: None)
+    assert e._filter_for("x") == ""
+    e.rg_db = lambda path: -3.456
+    assert e._filter_for("x") == "volume=-3.46dB"
+    e._eq = [6] + [0] * 9
+    assert e._filter_for("x").startswith("volume=-3.46dB,volume=-6.0dB,equalizer=f=31")
+    e.rg_db = lambda path: 1 / 0                 # a broken lookup never stops the music
+    assert e._filter_for("x").startswith("volume=-6.0dB")

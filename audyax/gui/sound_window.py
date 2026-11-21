@@ -1,5 +1,6 @@
 """AUDYAX player: the "Sonido" window (part 2, sound package). Equalizer with presets,
-transition between songs (no gap / crossfade) and automatic lyrics. Every change applies
+transition between songs (no gap / crossfade), same loudness (ReplayGain), keyboard media
+keys and automatic lyrics. Every change applies
 right away and is remembered in the settings."""
 
 import customtkinter as ctk
@@ -7,6 +8,7 @@ import customtkinter as ctk
 from audyax.player.engine import EQ_BANDS, EQ_LIMIT, EQ_PRESETS
 
 CUSTOM = "Personalizado"
+RG_MODES = {"off": "No", "track": "Por canción", "album": "Por álbum"}
 
 
 def band_label(freq: int) -> str:
@@ -105,6 +107,27 @@ class SoundWindow(ctk.CTkToplevel):
                      anchor="w").pack(fill="x", padx=16, pady=(4, 14))
         self._show_fade()
 
+        # ---- same loudness (ReplayGain) and keyboard
+        vol = self._card("Volumen y teclado")
+        row = ctk.CTkFrame(vol, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(0, 4))
+        ctk.CTkLabel(row, text="Igualar el volumen", font=app.f_normal).pack(side="left", padx=(0, 10))
+        self.seg_rg = ctk.CTkSegmentedButton(row, values=list(RG_MODES.values()), command=self._on_rg,
+                                             font=app.f_normal, selected_color=C["accent"],
+                                             selected_hover_color=C["accent_hover"])
+        self.seg_rg.set(RG_MODES.get(cfg.get("rg_playback", "track"), RG_MODES["track"]))
+        self.seg_rg.pack(side="left")
+        ctk.CTkLabel(vol, text="Usa el ReplayGain guardado en cada canción para que todas suenen igual de fuerte. "
+                               "«Por álbum» respeta las diferencias dentro de un mismo álbum. Las canciones sin "
+                               "ReplayGain suenan como están.",
+                     font=app.f_small, text_color=C["muted"], wraplength=520, justify="left",
+                     anchor="w").pack(fill="x", padx=16, pady=(4, 10))
+        self.sw_keys = ctk.CTkSwitch(vol, text="Controlar con las teclas multimedia del teclado",
+                                     font=app.f_normal, command=self._on_keys, progress_color=C["accent"])
+        if cfg.get("media_keys", True):
+            self.sw_keys.select()
+        self.sw_keys.pack(anchor="w", padx=16, pady=(0, 14))
+
         # ---- lyrics
         ly = self._card("Letras")
         self.sw_lyrics = ctk.CTkSwitch(ly, text="Buscar la letra automáticamente si la canción no la tiene",
@@ -182,6 +205,13 @@ class SoundWindow(ctk.CTkToplevel):
         self.l_fade.configure(text=f"{int(value)} s")
         self.app.cfg["crossfade"] = int(value) if self.seg.get() == "Fundido" else 0
         self.app._apply_sound_settings()
+
+    def _on_rg(self, label):
+        self.app._set_replaygain_mode(next(k for k, v in RG_MODES.items() if v == label))
+
+    def _on_keys(self):
+        self.app.cfg["media_keys"] = bool(self.sw_keys.get())
+        self.app._setup_media_keys()
 
     def _on_lyrics(self):
         self.app.cfg["auto_lyrics"] = bool(self.sw_lyrics.get())
