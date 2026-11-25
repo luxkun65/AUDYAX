@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -151,6 +152,7 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
                                logo_ico=str(resource_path("audyax.ico")))
         self.media_keys = None
         self.after(500, self._setup_media_keys)
+        self.after(800, self._start_tray)
         self.searching = False
         self.updating = False
         self._last_offered = ""     # last clipboard link already offered
@@ -1071,16 +1073,24 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
             in_progress = sum(1 for f in self.rows.values() if f["color"] == "yellow")
             self.tray.update_text(f"AUDYAX — {in_progress} en proceso" if in_progress else "AUDYAX")
 
+    def _start_tray(self):
+        """The icon next to the clock stays there the whole session (created once, in the
+        background so the window doesn't wait). Creating it again each time the window
+        closed sometimes failed on Windows, and then AUDYAX quit instead of hiding."""
+        if self.cfg.get("keep_in_background", True) and tray_available() and not self.tray.visible:
+            threading.Thread(target=lambda: self.tray.show("AUDYAX"), daemon=True, name="tray-start").start()
+
     def _to_tray(self) -> bool:
         """Hides the window and leaves AUDYAX as an icon next to the clock."""
-        if not self.tray.show("AUDYAX"):
-            return False
+        if not self.tray.visible and not self.tray.show("AUDYAX"):
+            time.sleep(0.3)                     # one more try (a previous icon may be closing)
+            if not self.tray.show("AUDYAX"):
+                return False
         self.withdraw()
         self._tray_text()
         return True
 
     def _from_tray(self):
-        self.tray.hide()
         self.deiconify()
         self.state("normal")
         self.lift()
@@ -1177,13 +1187,17 @@ class App(SettingsMixin, SongListMixin, DetailMixin, PlayerMixin, WatchedMixin, 
         """X button. With "Keep running in the background" (on by default), AUDYAX doesn't close:
         it hides next to the clock and keeps downloading. To quit completely: icon → Salir.
         Without that option (or without a system tray) it closes, asking if downloads are running."""
-        if self.cfg.get("keep_in_background", True) and tray_available() and self._to_tray():
-            if not self._background_notice_shown:
-                self._background_notice_shown = True  # explained only the first time
-                title = "AUDYAX sigue en segundo plano"
-                message = "Está junto al reloj. Para salir del todo: clic derecho en su icono → Salir."
-                if self.cfg.get("notifications", True) and not self.tray.notify(title, message):
-                    notify(title, message, str(resource_path("audyax.ico")))
+        if self.cfg.get("keep_in_background", True):
+            if tray_available() and self._to_tray():
+                if not self._background_notice_shown:
+                    self._background_notice_shown = True  # explained only the first time
+                    title = "AUDYAX sigue en segundo plano"
+                    message = "Está junto al reloj. Para salir del todo: clic derecho en su icono → Salir."
+                    if self.cfg.get("notifications", True) and not self.tray.notify(title, message):
+                        notify(title, message, str(resource_path("audyax.ico")))
+                return
+            # no icon could be shown: minimize instead of quitting (the music and downloads go on)
+            self.iconify()
             return
         if self.pending > 0 and not messagebox.askyesno(
                 "Descargas en curso", "Hay descargas en curso. ¿Cancelarlas y cerrar AUDYAX?"):
