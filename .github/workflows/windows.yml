@@ -41,6 +41,7 @@ jobs:
 
       - name: Save UI check screenshots
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ui-screenshots-windows
@@ -62,6 +63,7 @@ jobs:
           python tools/check_startup.py self-test.json --bundled-ffmpeg
 
       - name: Save the .zip
+        continue-on-error: true   # a full artifact quota must not stop the release
         uses: actions/upload-artifact@v4
         with:
           name: AUDYAX-windows
