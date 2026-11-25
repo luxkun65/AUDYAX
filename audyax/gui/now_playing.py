@@ -209,14 +209,16 @@ class NowPlayingView(ctk.CTkFrame):
         """Text colors: light on images (they're darkened), the theme's on the plain color.
         The accent is the same one the player bar uses (dynamic colors or scheme)."""
         dark = ctk.get_appearance_mode() == "Dark"
-        accent = self.app.player_palette()["accent"] if hasattr(self.app, "player_palette") else self.C["accent"]
+        pal = self.app.player_palette() if hasattr(self.app, "player_palette") else dict(self.C)
+        self._pal = pal                     # also for the layout buttons (same colors as the bar)
+        i = 1 if (dark or on_image) else 0
+        common = {"accent": pal["accent"][i], "on_accent": pal["on_accent"][i]}
         if on_image:
-            return {"text": LIGHT_TEXT, "muted": LIGHT_MUTED, "accent": accent[1], "panel": (0, 0, 0, 96)}
-        i = 1 if dark else 0
+            return {"text": LIGHT_TEXT, "muted": LIGHT_MUTED, "track": "#8a8399", "panel": (0, 0, 0, 96), **common}
         C = self.C
         card = C["card"][i].lstrip("#")
-        return {"text": C["text"][i], "muted": C["muted"][i], "accent": accent[i],
-                "panel": tuple(int(card[k:k + 2], 16) for k in (0, 2, 4)) + (255,)}
+        return {"text": C["text"][i], "muted": C["muted"][i], "track": C["hover"][i],
+                "panel": tuple(int(card[k:k + 2], 16) for k in (0, 2, 4)) + (255,), **common}
 
     # ---------------------------------------------------------------- drawing
     def _render_later(self):
@@ -238,6 +240,10 @@ class NowPlayingView(ctk.CTkFrame):
         r = np_layout.compute(self._layout(), w, h, has_next=bool(upcoming))
         bg, on_image = self._background(w, h)
         col = self._colors = self._palette(on_image)
+        pal = self._pal
+        self.seg.configure(selected_color=pal["accent"], selected_hover_color=pal["accent_hover"])
+        self.btn_full.configure(border_color=pal["accent"], hover_color=pal["hover"])
+        self.btn_find.configure(fg_color=pal["accent"], hover_color=pal["accent_hover"], text_color=pal["on_accent"])
         self.surface = col if on_image else None
         family = self.app.f_normal.cget("family")
 
@@ -342,11 +348,11 @@ class NowPlayingView(ctk.CTkFrame):
         family = self.app.f_normal.cget("family")
         x0, y0, x1, y1 = rect
         line_y = y0 + 16
-        track = "#8a8399" if on_image else col["muted"]
+        track = col["track"]
         ids = {"x0": x0, "x1": x1, "y": line_y}
         ids["track"] = cv.create_line(x0, line_y, x1, line_y, fill=track, width=4, capstyle="round")
-        ids["fill"] = cv.create_line(x0, line_y, x0, line_y, fill=col["text"], width=4, capstyle="round")
-        ids["knob"] = cv.create_oval(x0 - 7, line_y - 7, x0 + 7, line_y + 7, fill=col["text"], outline="")
+        ids["fill"] = cv.create_line(x0, line_y, x0, line_y, fill=col["accent"], width=4, capstyle="round")
+        ids["knob"] = cv.create_oval(x0 - 7, line_y - 7, x0 + 7, line_y + 7, fill=col["accent"], outline="")
         ids["hit"] = cv.create_rectangle(x0 - 8, line_y - 12, x1 + 8, line_y + 12, outline="", fill="")
         for item in (ids["track"], ids["fill"], ids["knob"], ids["hit"]):
             cv.addtag_withtag("prog", item)
@@ -359,8 +365,8 @@ class NowPlayingView(ctk.CTkFrame):
 
         # buttons
         cx, by = (x0 + x1) // 2, y0 + 70
-        play_bg = col["text"]
-        play_fg = "#1a1325" if on_image else self._plain_bg()
+        play_bg = col["accent"]                 # same as the player bar
+        play_fg = col["on_accent"]
         ids["play_circle"] = cv.create_oval(cx - 27, by - 27, cx + 27, by + 27, fill=play_bg, outline="",
                                             tags=("ctl_play",))
         self._play_icons = {k: self._icon_photo(k, play_fg, 22) for k in ("play", "pause")}
@@ -407,9 +413,9 @@ class NowPlayingView(ctk.CTkFrame):
             vx0 = vx1 - VOLUME_WIDTH
             cv.create_image(vx0 - 18, by, image=self._icon_photo("volume", col["muted"], 16))
             ids["vol_track"] = cv.create_line(vx0, by, vx1, by, fill=track, width=4, capstyle="round", tags=("vol",))
-            ids["vol_fill"] = cv.create_line(vx0, by, vx0, by, fill=col["text"], width=4, capstyle="round",
+            ids["vol_fill"] = cv.create_line(vx0, by, vx0, by, fill=col["accent"], width=4, capstyle="round",
                                              tags=("vol",))
-            ids["vol_knob"] = cv.create_oval(vx0 - 6, by - 6, vx0 + 6, by + 6, fill=col["text"], outline="",
+            ids["vol_knob"] = cv.create_oval(vx0 - 6, by - 6, vx0 + 6, by + 6, fill=col["accent"], outline="",
                                              tags=("vol",))
             ids["vol_hit"] = cv.create_rectangle(vx0 - 6, by - 12, vx1 + 6, by + 12, outline="", fill="",
                                                  tags=("vol",))
