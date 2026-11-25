@@ -138,3 +138,8 @@ def test_playback_db():
     quiet = {"track_gain": 8.0, "track_peak": 0.7}                        # boost limited by the peak
     assert rg.playback_db(quiet, "track") == round(-20 * __import__("math").log10(0.7), 2)
     assert rg.playback_db({"track_gain": 2.0}, "track", preamp=1.5) == 3.5
+
+
+def test_same_loudness_is_off_by_default():
+    from audyax.core.config import DEFAULT_CONFIG
+    assert DEFAULT_CONFIG["rg_playback"] == "off"

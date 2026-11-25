@@ -115,7 +115,7 @@ class SoundWindow(ctk.CTkToplevel):
         self.seg_rg = ctk.CTkSegmentedButton(row, values=list(RG_MODES.values()), command=self._on_rg,
                                              font=app.f_normal, selected_color=C["accent"],
                                              selected_hover_color=C["accent_hover"])
-        self.seg_rg.set(RG_MODES.get(cfg.get("rg_playback", "track"), RG_MODES["track"]))
+        self.seg_rg.set(RG_MODES.get(cfg.get("rg_playback", "off"), RG_MODES["off"]))
         self.seg_rg.pack(side="left")
         ctk.CTkLabel(vol, text="Usa el ReplayGain guardado en cada canción para que todas suenen igual de fuerte. "
                                "«Por álbum» respeta las diferencias dentro de un mismo álbum. Las canciones sin "

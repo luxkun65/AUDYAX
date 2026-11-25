@@ -188,7 +188,7 @@ class PlayerMixin:
         """dB for a song from its ReplayGain tags and the setting (called by the audio engine,
         from its thread). Read once per file version (cached by modification date)."""
         from audyax.core.replaygain import playback_db, read_replaygain
-        mode = self.cfg.get("rg_playback", "track")
+        mode = self.cfg.get("rg_playback", "off")
         if mode == "off":
             return 0.0
         try:
