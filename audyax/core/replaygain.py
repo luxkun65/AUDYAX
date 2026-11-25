@@ -100,3 +100,77 @@ def write_replaygain(path: Path, track: dict, album=None):
         audio.save()
     else:
         raise ValueError(f"el formato {ext} no admite ReplayGain en este programa")
+
+
+# ------------------------------------------------------------------------------
+# Reading it back, for the player: same loudness for every song while listening
+# ------------------------------------------------------------------------------
+def _number(text):
+    found = re.search(r"[-+]?\d+(?:\.\d+)?", str(text or ""))
+    return float(found.group(0)) if found else None
+
+
+def read_replaygain(path) -> dict:
+    """ReplayGain stored in a file, as numbers: {"track_gain", "track_peak", "album_gain",
+    "album_peak"} (dB relative to -18 LUFS, peaks as 0..1). Missing values are left out.
+    Reads the TXXX frames (MP3), the iTunes atoms (M4A), R128_* (Opus) and REPLAYGAIN_*
+    comments (FLAC, Ogg), so it also works with files tagged by other programs."""
+    if not HAS_MUTAGEN:
+        return {}
+    path = Path(path)
+    out = {}
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(path)
+    except Exception:
+        return {}
+    if audio is None or not audio.tags:
+        return {}
+    tags = audio.tags
+    found = {}
+    try:
+        items = tags.items() if hasattr(tags, "items") else list(tags)
+    except Exception:
+        items = []
+    for key, value in items:
+        name = str(key).upper()
+        if name.startswith("TXXX:"):
+            name = name[5:]
+        elif name.startswith("----:COM.APPLE.ITUNES:"):
+            name = name[len("----:COM.APPLE.ITUNES:"):]
+        texts = getattr(value, "text", value)
+        texts = texts if isinstance(texts, (list, tuple)) else [texts]
+        text = texts[0] if texts else ""
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", "replace")
+        found[name] = text
+    for kind in ("TRACK", "ALBUM"):
+        gain = _number(found.get(f"REPLAYGAIN_{kind}_GAIN"))
+        if gain is None and found.get(f"R128_{kind}_GAIN") is not None:
+            r128 = _number(found.get(f"R128_{kind}_GAIN"))
+            if r128 is not None:   # Q7.8 relative to -23 LUFS -> dB relative to -18 LUFS
+                gain = r128 / 256 + (REFERENCE_LUFS - REFERENCE_R128)
+        peak = _number(found.get(f"REPLAYGAIN_{kind}_PEAK"))
+        if gain is not None:
+            out[f"{kind.lower()}_gain"] = gain
+        if peak is not None and peak > 0:
+            out[f"{kind.lower()}_peak"] = peak
+    return out
+
+
+def playback_db(info: dict, mode: str = "track", preamp: float = 0.0) -> float:
+    """dB to apply when playing a song with the ReplayGain `info` (read_replaygain).
+    mode: "track" (every song at the same loudness), "album" (keeps the differences inside
+    an album; falls back to the track value) or "off". Never louder than the song's peak
+    allows, so it doesn't distort. Songs without ReplayGain: 0 dB."""
+    if mode == "off" or not info:
+        return 0.0
+    kind = "album" if mode == "album" and "album_gain" in info else "track"
+    gain = info.get(f"{kind}_gain")
+    if gain is None:
+        return 0.0
+    db = gain + preamp
+    peak = info.get(f"{kind}_peak")
+    if peak and db > 0:
+        db = min(db, -20 * math.log10(peak))   # headroom up to the peak
+    return round(db, 2)

@@ -2,6 +2,7 @@
 list and by the player view (audyax/gui/player_view.py). Double-clicking the sidebar logo
 switches between the downloader and the player, with an animation."""
 
+import os
 from pathlib import Path
 from tkinter import messagebox
 
@@ -180,7 +181,61 @@ class PlayerMixin:
             return
         engine = self.player.engine
         engine.crossfade = float(self.cfg.get("crossfade", 2) or 0)
+        engine.rg_db = self._replaygain_db
         engine.set_equalizer(self.cfg.get("eq_gains") if self.cfg.get("eq_enabled") else None)
+
+    def _replaygain_db(self, path) -> float:
+        """dB for a song from its ReplayGain tags and the setting (called by the audio engine,
+        from its thread). Read once per file version (cached by modification date)."""
+        from audyax.core.replaygain import playback_db, read_replaygain
+        mode = self.cfg.get("rg_playback", "off")
+        if mode == "off":
+            return 0.0
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return 0.0
+        cached = self._rg_cache.get(path)
+        if cached is None or cached[0] != mtime:
+            cached = (mtime, read_replaygain(path))
+            self._rg_cache[path] = cached
+        return playback_db(cached[1], mode)
+
+    def _set_replaygain_mode(self, mode: str):
+        self.cfg["rg_playback"] = mode
+        if self.player is not None:
+            self.player.engine.refilter()
+
+    # ---------------------------------------------------------------- media keys
+    def _setup_media_keys(self):
+        """Keyboard media keys: system-wide on Windows, with the window in front elsewhere."""
+        from audyax.gui.media_keys import TK_KEYS, MediaKeys
+        if self.media_keys is None:
+            self.media_keys = MediaKeys(lambda action: self.events.put(("tray", action)))
+            for sequence, action in TK_KEYS.items():
+                try:
+                    self.bind_all(sequence, lambda _e, a=action: self._tray_action(a), add="+")
+                except Exception:
+                    pass   # keysyms that this system doesn't know
+        if self.cfg.get("media_keys", True):
+            self.media_keys.start()
+        else:
+            self.media_keys.stop()
+
+    # ---------------------------------------------------------------- library
+    def _library_changed_soon(self):
+        """A download finished: the library reads the new songs a few seconds later (once,
+        even if several finish together)."""
+        if self.player_view is None:
+            return
+        if self._library_job:
+            self.after_cancel(self._library_job)
+        self._library_job = self.after(4000, self._library_refresh)
+
+    def _library_refresh(self):
+        self._library_job = None
+        if self.player_view is not None:
+            self.player_view.rescan()
 
     def _open_sound(self):
         from audyax.gui.sound_window import SoundWindow

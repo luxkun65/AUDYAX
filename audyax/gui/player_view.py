@@ -27,6 +27,7 @@ from audyax.core.library import format_duration
 SMART_LISTS = {"smart:most": "Más escuchadas", "smart:recent": "Escuchadas recientemente",
                "smart:added": "Añadidas recientemente"}
 SMART_SIZE = 50
+THUMB = 40          # px of the album covers in the "Álbumes" list
 
 VIEWS = ("Canciones", "Artistas", "Álbumes", "Listas", "Cola")
 
@@ -229,6 +230,9 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         self.shown = []                 # tracks in the song table, in the order shown
         self.group_items = {}           # group row id -> artist name / album key
         self.playing = None             # path of the library song that is playing
+        self._thumbs = {}               # album key -> PhotoImage of its cover (Álbumes)
+        self._thumbs_asked = set()
+        self._thumb_queue = queue.Queue()
         self._events = queue.Queue()    # scan thread -> UI
         self._cancel_scan = threading.Event()
         self._scanning = False
@@ -363,6 +367,12 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         style.configure("Library.Treeview", background=C["card"][i], fieldbackground=C["card"][i],
                         foreground=C["text"][i], borderwidth=0, rowheight=int(30 * scale),
                         font=(family, 10))
+        style.configure("Albums.Treeview", background=C["card"][i], fieldbackground=C["card"][i],
+                        foreground=C["text"][i], borderwidth=0, rowheight=int((THUMB + 10) * scale),
+                        font=(family, 10))
+        style.map("Albums.Treeview", background=[("selected", C["sel"][i])],
+                  foreground=[("selected", C["text"][i])])
+        style.layout("Albums.Treeview", [("Albums.Treeview.treearea", {"sticky": "nswe"})])
         style.map("Library.Treeview", background=[("selected", C["sel"][i])],
                   foreground=[("selected", C["text"][i])])
         style.configure("Library.Treeview.Heading", background=C["card2"][i], foreground=C["muted"][i],
@@ -400,12 +410,60 @@ class PlayerView(ctk.CTkFrame if ctk else object):
                 events.put(("error", str(e)))
         threading.Thread(target=work, daemon=True).start()
 
+    # ---------------------------------------------------------------- album covers
+    def _blank_thumb(self):
+        if getattr(self, "_blank", None) is None:
+            px = self._thumb_px()
+            self._blank = ImageTk.PhotoImage(Image.new("RGBA", (px, px), (0, 0, 0, 0)), master=self)
+        return self._blank
+
+    def _thumb_px(self) -> int:
+        return int(THUMB * ctk.ScalingTracker.get_widget_scaling(self))
+
+    def _load_thumbs(self, missing):
+        """Reads the album covers in the background; each one appears in the list when ready."""
+        if not missing:
+            return
+        self._thumbs_asked.update(k for k, _ in missing)
+        px, out = self._thumb_px(), self._thumb_queue
+
+        def work():
+            for key, path in missing:
+                try:
+                    img = load_cover(path)
+                    if img is not None:
+                        side = min(img.size)
+                        img = img.crop(((img.width - side) // 2, (img.height - side) // 2,
+                                        (img.width + side) // 2, (img.height + side) // 2)).resize((px, px), Image.LANCZOS)
+                        mask = Image.new("L", (px, px), 0)
+                        ImageDraw.Draw(mask).rounded_rectangle((0, 0, px - 1, px - 1), radius=max(3, px // 8), fill=255)
+                        img = img.convert("RGBA")
+                        img.putalpha(mask)
+                        out.put((key, img))
+                except Exception:
+                    pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_thumbs(self):
+        """UI thread: the covers read so far go into the album list."""
+        try:
+            while True:
+                key, img = self._thumb_queue.get_nowait()
+                self._thumbs[key] = ImageTk.PhotoImage(img, master=self)
+                if self.view == "Álbumes":
+                    for iid, k in self.group_items.items():
+                        if k == key and self.groups.exists(iid):
+                            self.groups.item(iid, image=self._thumbs[key])
+        except queue.Empty:
+            pass
+
     def _poll(self):
         try:
             if not self.winfo_exists():
                 return
         except tk.TclError:
             return
+        self._show_thumbs()
         last_progress = None
         try:
             while True:
@@ -519,6 +577,7 @@ class PlayerView(ctk.CTkFrame if ctk else object):
         selected = self.group_items.get(g.selection()[0]) if g.selection() else None
         g.delete(*g.get_children())
         self.group_items = {}
+        g.configure(style="Albums.Treeview" if self.view == "Álbumes" else "Library.Treeview")
         if self.view in ("Canciones", "Cola"):
             self.group_frame.grid_forget()
             return
@@ -552,14 +611,19 @@ class PlayerView(ctk.CTkFrame if ctk else object):
                 self.group_items[iid] = name
                 n += 1
         else:
+            missing = []
             for a in self.lib.albums():
                 if keep_albums is not None and a["key"] not in keep_albums:
                     continue
                 year = f" ({a['year']})" if a["year"] else ""
+                thumb = self._thumbs.get(a["key"])
                 iid = g.insert("", "end", text=f"  {a['album']}{year}  ·  {a['artist']}",
-                               tags=("odd",) if n % 2 else ())
+                               image=thumb or self._blank_thumb(), tags=("odd",) if n % 2 else ())
                 self.group_items[iid] = a["key"]
+                if thumb is None and a["key"] not in self._thumbs_asked:
+                    missing.append((a["key"], a["first"]["path"]))
                 n += 1
+            self._load_thumbs(missing)
         children = g.get_children()
         if self.view == "Listas" and not children:
             self.group_frame.grid(row=0, column=0, sticky="nsw")
@@ -769,6 +833,8 @@ class PlayerView(ctk.CTkFrame if ctk else object):
 
     def _tags_saved(self, old_path, new_path, data):
         """The library reads the file again (only it: the rest is in the cache)."""
+        self._thumbs.clear()            # the cover may have changed
+        self._thumbs_asked.clear()
         self._flash("Etiquetas guardadas")
         bar = self.app.player
         if bar is not None and bar.item and bar.item["path"] == old_path:
